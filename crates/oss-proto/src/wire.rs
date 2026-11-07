@@ -222,3 +222,124 @@ mod tests {
         assert_eq!(r.remaining(), 0);
     }
 }
+
+/// A fixed-size field that can be read from and written to the wire.
+pub trait Wire: Sized {
+    /// Encoded size in bytes.
+    const SIZE: usize;
+    /// Reads the field.
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
+    /// Appends the field.
+    fn write(&self, out: &mut Vec<u8>);
+}
+
+macro_rules! wire_int {
+    ($($t:ty => $get:ident, $put:ident;)*) => {$(
+        impl Wire for $t {
+            const SIZE: usize = core::mem::size_of::<$t>();
+            fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+                r.$get()
+            }
+            fn write(&self, out: &mut Vec<u8>) {
+                out.$put(*self)
+            }
+        }
+    )*};
+}
+
+wire_int! {
+    u8 => u8, put_u8;
+    i8 => i8, put_i8;
+    u16 => u16, put_u16;
+    i16 => i16, put_i16;
+    u32 => u32, put_u32;
+    i32 => i32, put_i32;
+}
+
+impl<const N: usize> Wire for [u8; N] {
+    const SIZE: usize = N;
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        r.array()
+    }
+    fn write(&self, out: &mut Vec<u8>) {
+        out.put_bytes(self)
+    }
+}
+
+impl<const N: usize> Wire for FixedStr<N> {
+    const SIZE: usize = N;
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        r.fixed()
+    }
+    fn write(&self, out: &mut Vec<u8>) {
+        out.put_bytes(&self.0)
+    }
+}
+
+/// A packet with a type byte and a codec. `decode` takes the whole packet, type
+/// byte included; `encode` writes it, type byte included.
+pub trait Packet: Sized {
+    /// The packet's type byte.
+    const TYPE: u8;
+    /// Decodes a whole packet (type byte first).
+    fn decode(data: &[u8]) -> Result<Self, DecodeError>;
+    /// Appends the whole packet (type byte first).
+    fn encode(&self, out: &mut Vec<u8>);
+    /// The encoded packet.
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::new();
+        self.encode(&mut v);
+        v
+    }
+}
+
+/// Checks the type byte and returns a reader positioned after it.
+pub fn expect_type(data: &[u8], ty: u8) -> Result<Reader<'_>, DecodeError> {
+    let found = *data.first().ok_or(DecodeError::Empty)?;
+    if found != ty {
+        return Err(DecodeError::WrongType {
+            expected: ty,
+            found,
+        });
+    }
+    let mut r = Reader::new(data, ty);
+    r.u8()?;
+    Ok(r)
+}
+
+/// Defines a packet whose body is a fixed sequence of [`Wire`] fields. Trailing
+/// bytes beyond the fixed layout are ignored when decoding.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! fixed_packet {
+    (
+        $(#[$m:meta])*
+        pub struct $name:ident = $ty:expr;
+        { $( $(#[$fm:meta])* pub $f:ident : $t:ty ),* $(,)? }
+    ) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, PartialEq, Eq, Default)]
+        pub struct $name {
+            $( $(#[$fm])* pub $f: $t, )*
+        }
+
+        impl $name {
+            /// Encoded length, type byte included.
+            pub const LEN: usize = 1 $( + <$t as $crate::wire::Wire>::SIZE )*;
+        }
+
+        impl $crate::wire::Packet for $name {
+            const TYPE: u8 = $ty;
+            #[allow(unused_mut, unused_variables)]
+            fn decode(data: &[u8]) -> Result<Self, $crate::DecodeError> {
+                let mut r = $crate::wire::expect_type(data, $ty)?;
+                Ok(Self { $( $f: <$t as $crate::wire::Wire>::read(&mut r)?, )* })
+            }
+            #[allow(unused_variables)]
+            fn encode(&self, out: &mut alloc::vec::Vec<u8>) {
+                out.push($ty);
+                $( <$t as $crate::wire::Wire>::write(&self.$f, out); )*
+            }
+        }
+    };
+}

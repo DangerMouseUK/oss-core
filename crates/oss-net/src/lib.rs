@@ -4,3 +4,7 @@
 //! acknowledgements, clustering, chunked and sized transfers, time sync and the
 //! pluggable packet ciphers. Callers feed datagrams in and pull datagrams out; the
 //! same state machine serves clients, servers and bots, native and wasm.
+
+pub mod vie;
+
+pub use vie::VieCipher;
