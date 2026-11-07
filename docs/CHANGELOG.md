@@ -4,6 +4,26 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net
+- `Connection` (either end, sans-IO):
+  - Construction: `client(cfg, Box<dyn Handshake>, now)`, `server(cfg, Accept, now)`.
+  - Driving: `handle_datagram`, `tick`, `flush`, `send(&[u8], reliable)` (anything over 506 bytes goes as reliable big data), `send_sized` / `cancel_outgoing_sized` / `cancel_incoming_sized`, `disconnect`.
+  - Output: `poll_transmit`, and `poll_event` returning `Event::{Connected, Packet, SizedProgress, SizedIncomingCancelled, SizedSent, SizedCancelled, Disconnected}`.
+  - Status: `stats`, `rtt_ms`, `server_ticks(now)`, `peer_counts`, `next_timeout`.
+  - `Config::{client, server}` expose public tunables; `ticks(now_ms)` converts to protocol ticks.
+- `Server<A>`: `new`, `add_acceptor`, `max_connections`, `handle_datagram(now, addr, &[u8])`, `tick`, `send`, `connection(_mut)`, `disconnect`, `poll_transmit -> (A, Vec<u8>)`, `poll_event -> (A, Event)`.
+- `cipher`:
+  - Traits: object-safe `Cipher` (including `handle_core` for in-session subtypes ≥ 0x10, and `poll`), `Handshake`, `Acceptor`.
+  - Supporting types: `Accept`, `Step`, `CipherContext`.
+  - Implementations and helpers: `NullCipher`, `VieAcceptor`, `NullAcceptor`, `VieClientHandshake`, `vie_cipher`, `parse_connect`.
+- `vie`: `VieCipher`, `client_key_from_seed`, `server_key_for`.
+
+### oss-proto (rng)
+- `VieRng`: the shared prize/door generator, with `new(seed)` and `next_u32()`; it also implements `Iterator`.
+
+### docs
+- `docs/protocol/` adds pages on transport, encryption, game packets, settings and checksums.
+
 ### oss-formats
 - `Level::parse(&[u8]) -> Result<Level, FormatError>` / `Level::to_bytes()`: `.lvl` files with optional tileset (`Tileset { bytes }`, raw BMP incl. file header), optional eLVL `Metadata`, `tiles: Vec<TileEntry>` in file order. Well-formed files rewrite byte for byte.
 - `Level::tile_grid() -> TileGrid` (dense 1024x1024, `get(x, y)`, `set`, `cells()`); `Level::set_tiles_from_grid`.
