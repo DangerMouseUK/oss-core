@@ -37,6 +37,19 @@ pub trait Cipher: Send {
     /// Short name for logs ("none", "vie", ...).
     fn name(&self) -> &'static str;
 
+    /// Bytes [`Cipher::encrypt`] may add to a datagram. The connection keeps
+    /// plaintext datagrams this much smaller than [`crate::Config::max_send`]
+    /// and accepts this much more than [`crate::Config::max_recv`].
+    fn overhead(&self) -> usize {
+        0
+    }
+
+    /// The peer's long-term public key, if the cipher authenticated one (e.g. an
+    /// OpenSec server key a client can pin).
+    fn peer_key(&self) -> Option<[u8; 32]> {
+        None
+    }
+
     /// Which encryption family this is. Servers use it to tell SubSpace (VIE)
     /// clients from Continuum clients, e.g. for the login packet length check.
     /// External implementations should override it; the default is
@@ -56,6 +69,8 @@ pub enum CipherKind {
     Vie,
     /// Continuum encryption (provided by an external implementation).
     Continuum,
+    /// OpenSec (X25519 + ChaCha20-Poly1305), this project's encryption.
+    OpenSec,
     /// Some other implementation.
     Other,
 }
@@ -103,6 +118,75 @@ pub trait Handshake: Send {
 
     /// Timer: send the first/next setup datagram, resend, or give up.
     fn poll(&mut self, now: u64, out: &mut Vec<Vec<u8>>) -> Step;
+}
+
+/// Tries one handshake, then switches to another if the first gets no answer
+/// within a time limit. Typical use: OpenSec first, VIE for servers that do not
+/// speak it. A *failure* of the first (for example a server key that does not
+/// match a pinned key) ends the handshake instead of falling back, so an
+/// attacker cannot force a downgrade by tampering; dropping packets still can,
+/// so clients that pinned a server key should not use a fallback at all.
+pub struct Fallback {
+    primary: Box<dyn Handshake>,
+    secondary: Box<dyn Handshake>,
+    switch_after_ms: u64,
+    started: Option<u64>,
+    on_secondary: bool,
+}
+
+impl core::fmt::Debug for Fallback {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Fallback")
+            .field("switch_after_ms", &self.switch_after_ms)
+            .field("on_secondary", &self.on_secondary)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Fallback {
+    /// Runs `primary` for up to `switch_after_ms`, then `secondary`.
+    pub fn new(
+        primary: Box<dyn Handshake>,
+        secondary: Box<dyn Handshake>,
+        switch_after_ms: u64,
+    ) -> Self {
+        Self {
+            primary,
+            secondary,
+            switch_after_ms,
+            started: None,
+            on_secondary: false,
+        }
+    }
+
+    /// Whether the fallback handshake is in use.
+    pub fn on_secondary(&self) -> bool {
+        self.on_secondary
+    }
+}
+
+impl Handshake for Fallback {
+    fn on_datagram(&mut self, now: u64, data: &[u8], out: &mut Vec<Vec<u8>>) -> Step {
+        if self.on_secondary {
+            self.secondary.on_datagram(now, data, out)
+        } else {
+            // A failure of the primary (e.g. a server key that does not match a
+            // pinned key) ends the handshake: switching would be a downgrade.
+            self.primary.on_datagram(now, data, out)
+        }
+    }
+
+    fn poll(&mut self, now: u64, out: &mut Vec<Vec<u8>>) -> Step {
+        let started = *self.started.get_or_insert(now);
+        if !self.on_secondary && now.saturating_sub(started) >= self.switch_after_ms {
+            self.on_secondary = true;
+        }
+        if self.on_secondary {
+            self.secondary.poll(now, out)
+        } else {
+            self.primary.poll(now, out)
+        }
+    }
 }
 
 /// Outcome of [`Acceptor::accept`].

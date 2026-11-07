@@ -4,6 +4,17 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (OpenSec)
+- `opensec` module, behind the default feature `opensec`. Specification: `docs/protocol/opensec.md`; vectors: `tests/vectors/opensec.txt`.
+  - Server side: `OpenSecAcceptor::new(Option<ServerKey>, Entropy)`; `ServerKey` provides `from_secret`, `generate`, `public` and `secret_bytes`.
+  - Client side: `OpenSecClientHandshake::new(&Entropy, pinned: Option<[u8; 32]>)` plus `.timeout(ms)`.
+  - Also exposed: `OpenSecCipher` and the pure functions `server_respond` and `client_finish`.
+  - Entropy: `os_entropy()` behind the feature `os-entropy`. Without that feature (e.g. for wasm), supply your own `Entropy`.
+- `cipher::Fallback::new(primary, secondary, switch_after_ms)` switches handshakes when the primary gets no answer, for example OpenSec then VIE. A primary *failure* never falls back.
+- New `Cipher` trait methods, both with defaults: `overhead()` (the connection shrinks packing to fit) and `peer_key()`. New `Connection::peer_key()` and `CipherKind::OpenSec`.
+- `Server` now answers an exact duplicate of a connection request from a fresh connection by resending its cached reply, instead of re-keying.
+- `oss-net` builds for `wasm32-unknown-unknown` with `--no-default-features --features opensec`.
+
 ### oss-formats (replay)
 - `replay`: `.ossr` replay files.
   - Types: `Replay { records, truncated }` and `Record { kind: RecordKind, time_ms, data }`.

@@ -8,6 +8,7 @@ A versioned, implementation-driven description of the SubSpace/Continuum network
 |---|---|
 | [transport.md](transport.md) | core `0x00` packets: setup, reliable delivery, clusters, big and sized transfers, time sync, disconnects, size limits |
 | [encryption.md](encryption.md) | the VIE cipher, the shape of the Continuum handshake, the plug-in model |
+| [opensec.md](opensec.md) | OpenSec v1: X25519 + ChaCha20-Poly1305 transport encryption (specification) |
 | [game-packets.md](game-packets.md) | every server-to-client and client-to-server game packet |
 | [settings.md](settings.md) | the 1428-byte arena settings packet and its configuration keys |
 | [checksums.md](checksums.md) | file, position and security checksums; the game RNG |

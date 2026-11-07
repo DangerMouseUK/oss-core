@@ -59,12 +59,14 @@ impl<A: Eq + Hash + Clone> Server<A> {
             .acceptors
             .iter()
             .find_map(|a| a.accept(now, data, &mut out));
+        let replies = out.clone();
         out.into_iter()
             .for_each(|d| self.raw_out.push_back((from.clone(), d)));
         match accepted {
             Some(acc) => {
                 let mut conn = Connection::server(self.cfg.clone(), acc, now);
                 conn.set_connect_protocol(crate::cipher::parse_connect(data).map(|(_, p)| p));
+                conn.set_accept_record(data, &replies);
                 // The request itself counts as received traffic.
                 conn.note_received(now, data.len());
                 self.conns.insert(from.clone(), conn);
@@ -90,6 +92,17 @@ impl<A: Eq + Hash + Clone> Server<A> {
                     return;
                 }
                 self.try_accept(now, &from, data);
+            }
+            Some(conn)
+                if is_request && conn.accept_record().0 == data && !conn.session_started() =>
+            {
+                // A duplicate of the request this connection came from (its
+                // answer was lost): answer identically, keep the session.
+                conn.note_received(now, data.len());
+                let replies = conn.accept_record().1.to_vec();
+                for r in replies {
+                    self.raw_out.push_back((from.clone(), r));
+                }
             }
             Some(conn) if is_request && data[1] == 0x01 => {
                 if conn.session_started() {

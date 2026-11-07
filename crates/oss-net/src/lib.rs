@@ -36,12 +36,14 @@
 
 pub mod cipher;
 mod connection;
+#[cfg(feature = "opensec")]
+pub mod opensec;
 mod server;
 pub mod vie;
 
 pub use cipher::{
-    Accept, Acceptor, Cipher, CipherContext, CipherKind, Handshake, NullAcceptor, NullCipher, Step,
-    VieAcceptor, VieClientHandshake,
+    Accept, Acceptor, Cipher, CipherContext, CipherKind, Fallback, Handshake, NullAcceptor,
+    NullCipher, Step, VieAcceptor, VieClientHandshake,
 };
 pub use connection::{
     Config, Connection, DisconnectReason, Event, Priority, SendFlags, Stats, TransferId, ticks,

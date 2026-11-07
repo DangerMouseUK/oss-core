@@ -352,6 +352,8 @@ pub struct Connection {
     state: State,
     cipher: Option<Box<dyn Cipher>>,
     connect_protocol: Option<u16>,
+    accept_request: Vec<u8>,
+    accept_replies: Vec<Vec<u8>>,
     last_recv: u64,
     session_started: bool,
     // Reliable send.
@@ -417,6 +419,8 @@ impl Connection {
             state,
             cipher: None,
             connect_protocol: None,
+            accept_request: Vec::new(),
+            accept_replies: Vec::new(),
             last_recv: now,
             session_started: false,
             next_seq: 0,
@@ -499,6 +503,12 @@ impl Connection {
         self.cipher.as_ref().map(|c| c.kind())
     }
 
+    /// The peer's authenticated long-term key, if the cipher has one (an
+    /// OpenSec server key, for pinning on the client).
+    pub fn peer_key(&self) -> Option<[u8; 32]> {
+        self.cipher.as_ref().and_then(|c| c.peer_key())
+    }
+
     /// The protocol word from the client's `00 01` request (0x0001 SubSpace,
     /// 0x0011 Continuum), on server-side connections created by [`crate::Server`].
     pub fn connect_protocol(&self) -> Option<u16> {
@@ -566,6 +576,25 @@ impl Connection {
         self.transmit.pop_front()
     }
 
+    /// Largest plaintext datagram, leaving room for the cipher's overhead.
+    fn max_plain(&self) -> usize {
+        let overhead = self.cipher.as_ref().map_or(0, |c| c.overhead());
+        self.cfg.max_send.saturating_sub(overhead)
+    }
+
+    /// The connection request this server-side connection was created from and
+    /// the raw replies sent to it, so a duplicate request can be answered
+    /// identically instead of re-keying.
+    pub(crate) fn set_accept_record(&mut self, request: &[u8], replies: &[Vec<u8>]) {
+        self.accept_request.clear();
+        self.accept_request.extend_from_slice(request);
+        self.accept_replies = replies.to_vec();
+    }
+
+    pub(crate) fn accept_record(&self) -> (&[u8], &[Vec<u8>]) {
+        (&self.accept_request, &self.accept_replies)
+    }
+
     fn rto(&self) -> u64 {
         (self.rtt_avg + 4 * self.rtt_dev).clamp(self.cfg.rto_min_ms, self.cfg.rto_max_ms)
     }
@@ -587,7 +616,7 @@ impl Connection {
         if packet.is_empty() || self.is_closed() {
             return;
         }
-        if packet.len() + 6 > self.cfg.max_send {
+        if packet.len() + 6 > self.max_plain() {
             self.send_big(packet);
         } else if flags.reliable {
             let b = self.pool.copy_of(packet);
@@ -707,7 +736,8 @@ impl Connection {
 
     /// Handles one received datagram (as read from the socket).
     pub fn handle_datagram(&mut self, now: u64, data: &[u8]) {
-        if data.is_empty() || data.len() > self.cfg.max_recv {
+        let overhead = self.cipher.as_ref().map_or(0, |c| c.overhead());
+        if data.is_empty() || data.len() > self.cfg.max_recv + overhead {
             self.stats.dropped += 1;
             return;
         }
@@ -1107,7 +1137,7 @@ impl Connection {
         let mut packer = Packer {
             cur: self.pool.take(),
             count: 0,
-            max: self.cfg.max_send,
+            max: self.max_plain(),
         };
         let mut em = Emitter {
             cipher: &mut self.cipher,
