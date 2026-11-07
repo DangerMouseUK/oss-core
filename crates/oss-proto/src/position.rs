@@ -237,6 +237,45 @@ fn read_extra(r: &mut Reader<'_>) -> Result<Option<ExtraPositionData>, DecodeErr
     }
 }
 
+/// Optional trailer on S2C position packets, chosen per recipient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PositionTail {
+    /// No trailer.
+    #[default]
+    None,
+    /// Energy only (2 bytes).
+    Energy(u16),
+    /// Full [`ExtraPositionData`] (10 bytes).
+    Extra(ExtraPositionData),
+}
+
+impl PositionTail {
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        Ok(match r.remaining() {
+            n if n >= ExtraPositionData::LEN => Self::Extra(ExtraPositionData::read(r)?),
+            n if n >= 2 => Self::Energy(r.u16()?),
+            _ => Self::None,
+        })
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::None => {}
+            Self::Energy(e) => out.put_u16(*e),
+            Self::Extra(x) => x.write(out),
+        }
+    }
+
+    /// The energy value, if the trailer carries one.
+    pub fn energy(&self) -> Option<u16> {
+        match self {
+            Self::None => None,
+            Self::Energy(e) => Some(*e),
+            Self::Extra(x) => Some(x.energy),
+        }
+    }
+}
+
 /// C2S `0x03`: the client's position (22 bytes, or 32 with extra data).
 ///
 /// `checksum` is the XOR of the first 22 bytes with the checksum byte taken as 0;
@@ -327,7 +366,7 @@ impl Packet for C2SPosition {
 }
 
 /// S2C `0x05`: another player's position with a weapon (also used for positions
-/// that do not fit the small form). 21 bytes, or 31 with extra data.
+/// that do not fit the small form). 21 bytes, 23 with energy, 31 with extra data.
 ///
 /// `checksum` is the XOR of the first 21 bytes with the checksum byte taken as 0;
 /// encode fills it in.
@@ -357,8 +396,8 @@ pub struct S2CWeapon {
     pub bounty: u16,
     /// Weapon fired.
     pub weapon: WeaponInfo,
-    /// Optional trailer.
-    pub extra: Option<ExtraPositionData>,
+    /// Optional trailer (energy or full extra data).
+    pub tail: PositionTail,
 }
 
 impl S2CWeapon {
@@ -392,7 +431,7 @@ impl Packet for S2CWeapon {
             y: r.i16()?,
             bounty: r.u16()?,
             weapon: WeaponInfo::read(&mut r)?,
-            extra: read_extra(&mut r)?,
+            tail: PositionTail::read(&mut r)?,
         })
     }
     fn encode(&self, out: &mut Vec<u8>) {
@@ -412,14 +451,12 @@ impl Packet for S2CWeapon {
         self.weapon.write(out);
         let sum = position_checksum(&out[start..start + Self::LEN]);
         out[start + Self::CHECKSUM_OFFSET] = sum;
-        if let Some(e) = &self.extra {
-            e.write(out);
-        }
+        self.tail.write(out);
     }
 }
 
-/// S2C `0x28`: another player's position, small form (16 bytes, or 26 with extra
-/// data). Usable when the player id and bounty fit in a byte and no weapon was
+/// S2C `0x28`: another player's position, small form (16 bytes, 18 with energy,
+/// 26 with extra data). Usable when the player id and bounty fit in a byte and no weapon was
 /// fired.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct S2CPosition {
@@ -443,8 +480,8 @@ pub struct S2CPosition {
     pub y: i16,
     /// X velocity.
     pub x_speed: i16,
-    /// Optional trailer.
-    pub extra: Option<ExtraPositionData>,
+    /// Optional trailer (energy or full extra data).
+    pub tail: PositionTail,
 }
 
 impl S2CPosition {
@@ -467,7 +504,7 @@ impl Packet for S2CPosition {
             y_speed: r.i16()?,
             y: r.i16()?,
             x_speed: r.i16()?,
-            extra: read_extra(&mut r)?,
+            tail: PositionTail::read(&mut r)?,
         })
     }
     fn encode(&self, out: &mut Vec<u8>) {
@@ -482,9 +519,7 @@ impl Packet for S2CPosition {
         out.put_i16(self.y_speed);
         out.put_i16(self.y);
         out.put_i16(self.x_speed);
-        if let Some(e) = &self.extra {
-            e.write(out);
-        }
+        self.tail.write(out);
     }
 }
 
@@ -572,7 +607,11 @@ mod tests {
 
     #[test]
     fn s2c_weapon_round_trip() {
-        for extra in [None, Some(extra())] {
+        for (tail, len) in [
+            (PositionTail::None, 21),
+            (PositionTail::Energy(900), 23),
+            (PositionTail::Extra(extra()), 31),
+        ] {
             let p = S2CWeapon {
                 rotation: 5,
                 time: 0xBEEF,
@@ -586,10 +625,10 @@ mod tests {
                 y: 200,
                 bounty: 50,
                 weapon: weapon(),
-                extra,
+                tail,
             };
             let b = p.to_bytes();
-            assert_eq!(b.len(), if extra.is_some() { 31 } else { 21 });
+            assert_eq!(b.len(), len);
             assert_eq!(position_checksum(&b[..21]), 0);
             let back = S2CWeapon::decode(&b).unwrap();
             assert!(back.checksum_ok());
@@ -605,7 +644,11 @@ mod tests {
 
     #[test]
     fn s2c_position_round_trip() {
-        for extra in [None, Some(extra())] {
+        for (tail, len) in [
+            (PositionTail::None, 16),
+            (PositionTail::Energy(900), 18),
+            (PositionTail::Extra(extra()), 26),
+        ] {
             let p = S2CPosition {
                 rotation: 1,
                 time: 2,
@@ -617,10 +660,10 @@ mod tests {
                 y_speed: 8,
                 y: 9,
                 x_speed: -10,
-                extra,
+                tail,
             };
             let b = p.to_bytes();
-            assert_eq!(b.len(), if extra.is_some() { 26 } else { 16 });
+            assert_eq!(b.len(), len);
             assert_eq!(S2CPosition::decode(&b).unwrap(), p);
         }
     }

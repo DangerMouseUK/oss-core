@@ -23,3 +23,10 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 - `Lvz::parse` / `to_bytes` (byte-exact; compressed bytes kept as stored), `Section { name, file_time, decompressed_size, stored }`, `Section::data()` (inflate), `Section::new(name, time, data)` (deflate), `Section::objects(&ObjectSection)`, `Lvz::object_sections()`.
 - `ObjectSection { version, objects: Vec<ObjectData>, images: Vec<ImageDef> }`. `ObjectData` is `oss_proto::ObjectData` (re-exported), with accessors for map/screen coordinates, layer, mode, display time.
 - New dependencies: `oss-proto`, `miniz_oxide` 0.8 (MIT/Zlib/Apache-2.0, `no_std` + alloc).
+
+### oss-proto (game packets)
+- `s2c` and `c2s` modules: a struct per packet type implementing `Packet` (`TYPE`, `decode(&[u8])` with type byte, `encode`, `to_bytes`), type-byte constants in `s2c::kind` / `c2s::kind`, and dispatch enums `S2CPacket` / `C2SPacket` (`decode`, `encode`, `to_bytes`, `kind()`, `From<T>` for each packet, `Unknown { kind, data }` fallback). `Settings` and `Registration` variants are boxed.
+- Multi-length packets: `PlayerId.extra`, `SpecData::{ExtraData, Player}`, `MapFilename::{Single, Files}`, `GoArena.optional_graphics` (26/27), `Login` (101/165; `ContLogin` wraps the 0x24 form), `MapRequest.index`, `SecurityResponse.continuum` (40/46), `Bricks` (empty = clear).
+- **Breaking:** S2C position packets now carry `tail: PositionTail { None, Energy(u16), Extra(ExtraPositionData) }` (lengths 16/18/26 and 21/23/31) instead of `extra: Option<_>`.
+- Shared structures in `common`: `PlayerData` (64-byte S2C 0x03 records, concatenatable), `Brick`, `DamageData`, `ObjectToggle`, `ObjectChange`, `SmallBatchedPosition` / `LargeBatchedPosition` / `PackedMotion` (0x39/0x3A), constants `chat_type`, `prize`, `object_change`; `c2s::client_features`, `c2s::arena_type`, `s2c::login_code`.
+- `wire::Raw<N>` for long raw byte fields (banners).

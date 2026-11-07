@@ -256,13 +256,48 @@ wire_int! {
     i32 => i32, put_i32;
 }
 
-impl<const N: usize> Wire for [u8; N] {
-    const SIZE: usize = N;
+impl<T: Wire + Copy + Default, const N: usize> Wire for [T; N] {
+    const SIZE: usize = T::SIZE * N;
     fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        r.array()
+        let mut a = [T::default(); N];
+        for v in &mut a {
+            *v = T::read(r)?;
+        }
+        Ok(a)
     }
     fn write(&self, out: &mut Vec<u8>) {
-        out.put_bytes(self)
+        self.iter().for_each(|v| v.write(out))
+    }
+}
+
+/// A fixed-size block of raw bytes (for fields longer than 32 bytes, where plain
+/// arrays lack `Default`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Raw<const N: usize>(pub [u8; N]);
+
+impl<const N: usize> Default for Raw<N> {
+    fn default() -> Self {
+        Self([0; N])
+    }
+}
+
+impl<const N: usize> fmt::Debug for Raw<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Raw<{N}>(")?;
+        for b in &self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        f.write_str(")")
+    }
+}
+
+impl<const N: usize> Wire for Raw<N> {
+    const SIZE: usize = N;
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        r.array().map(Self)
+    }
+    fn write(&self, out: &mut Vec<u8>) {
+        out.put_bytes(&self.0)
     }
 }
 
@@ -290,6 +325,16 @@ pub trait Packet: Sized {
         let mut v = Vec::new();
         self.encode(&mut v);
         v
+    }
+}
+
+impl<T: Packet> Packet for alloc::boxed::Box<T> {
+    const TYPE: u8 = T::TYPE;
+    fn decode(data: &[u8]) -> Result<Self, DecodeError> {
+        T::decode(data).map(alloc::boxed::Box::new)
+    }
+    fn encode(&self, out: &mut Vec<u8>) {
+        T::encode(self, out)
     }
 }
 

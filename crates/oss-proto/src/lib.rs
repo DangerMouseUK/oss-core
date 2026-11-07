@@ -6,22 +6,33 @@
 //!
 //! * [`settings`]: the arena settings packet ([`ClientSettings`]).
 //! * [`checksum`]: CRC-32 and the security/position checksums.
-//! * [`wire`]: reader/writer helpers and [`FixedStr`].
+//! * [`s2c`] / [`c2s`]: every game packet, with [`S2CPacket`] / [`C2SPacket`]
+//!   dispatch enums; [`position`] and [`common`] hold shared structures.
+//! * [`control`]: the `0x00` transport packets ([`CorePacket`]).
+//! * [`objects`]: LVZ object records.
+//! * [`wire`]: reader/writer helpers, [`Packet`] and [`FixedStr`].
 #![no_std]
 
 extern crate alloc;
 
+pub mod c2s;
 pub mod checksum;
+pub mod common;
 pub mod control;
 mod error;
 pub mod objects;
 pub mod position;
+pub mod s2c;
 pub mod settings;
 pub mod wire;
 
+pub use c2s::C2SPacket;
 pub use control::CorePacket;
 pub use error::DecodeError;
 pub use objects::ObjectData;
-pub use position::{C2SPosition, ExtraPositionData, S2CPosition, S2CWeapon, WeaponInfo};
+pub use position::{
+    C2SPosition, ExtraPositionData, PositionTail, S2CPosition, S2CWeapon, WeaponInfo,
+};
+pub use s2c::S2CPacket;
 pub use settings::{ClientSettings, ShipSettings, SpawnPosition};
 pub use wire::{FixedStr, Packet};
