@@ -22,6 +22,7 @@ pub mod control;
 mod error;
 pub mod objects;
 pub mod position;
+pub mod rng;
 pub mod s2c;
 pub mod settings;
 pub mod wire;
@@ -33,6 +34,7 @@ pub use objects::ObjectData;
 pub use position::{
     C2SPosition, ExtraPositionData, PositionTail, S2CPosition, S2CWeapon, WeaponInfo,
 };
+pub use rng::VieRng;
 pub use s2c::S2CPacket;
 pub use settings::{ClientSettings, ShipSettings, SpawnPosition};
 pub use wire::{FixedStr, Packet};
