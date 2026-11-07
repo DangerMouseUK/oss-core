@@ -8,6 +8,7 @@ multiple-versions = "warn"
 
 [advisories]
 yanked = "deny"
+unmaintained = "workspace"
 
 [sources]
 unknown-registry = "deny"

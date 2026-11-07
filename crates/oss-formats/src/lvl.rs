@@ -61,11 +61,24 @@ impl TileEntry {
 ///
 /// Holds the bitmap bytes verbatim, starting with the 14-byte `"BM"` file header
 /// and including any padding before the metadata section. The header's size and
-/// metadata-offset fields are rewritten by [`Level::to_bytes`].
+/// metadata-offset fields are rewritten by [`Level::to_bytes`]. The metadata
+/// section is written directly after these bytes, so they include any alignment
+/// padding (use [`Tileset::from_bitmap`] for new files).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tileset {
     /// Raw bitmap bytes, file header included.
     pub bytes: Vec<u8>,
+}
+
+impl Tileset {
+    /// A tileset from a complete `.bmp` file, zero-padded to a multiple of four
+    /// bytes so an eLVL section written after it is aligned as the format
+    /// recommends.
+    pub fn from_bitmap(bmp: &[u8]) -> Self {
+        let mut bytes = bmp.to_vec();
+        bytes.resize(bytes.len().next_multiple_of(4), 0);
+        Self { bytes }
+    }
 }
 
 /// A parsed level file.
@@ -264,7 +277,6 @@ impl Level {
             out[..2].copy_from_slice(b"BM");
             let meta_at = match &meta {
                 Some(m) => {
-                    out.resize(out.len().next_multiple_of(4), 0);
                     let at = out.len();
                     out.extend_from_slice(m);
                     at
@@ -427,9 +439,7 @@ mod tests {
         let mut r = Region::new("center", &region);
         r.chunks.push(RegionChunk::NoAntiwarp);
         let lvl = Level {
-            tileset: Some(Tileset {
-                bytes: fake_bitmap(),
-            }),
+            tileset: Some(Tileset::from_bitmap(&fake_bitmap())),
             metadata: Some(Metadata {
                 reserved: 0,
                 chunks: vec![
