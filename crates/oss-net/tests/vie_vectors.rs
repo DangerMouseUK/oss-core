@@ -44,7 +44,8 @@ fn key_exchange() {
             matches!(accepted, Some(Accept::Established(_))),
             "key {client_key:#x}"
         );
-        assert_eq!(out, [response.clone()], "key {client_key:#x}");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], response, "key {client_key:#x}");
         // Our client builds the same request for that key and accepts the response.
         let mut hs = VieClientHandshake::with_key(client_key, 1);
         let mut sent = Vec::new();
