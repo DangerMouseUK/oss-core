@@ -26,7 +26,12 @@ The connection request (`00 01`) carries a protocol word that selects the encryp
 - Decryption runs the same chain, using the received ciphertext words.
 - The length never changes.
 
-Test vectors live in `crates/oss-net/src/vie.rs`.
+**Key edge cases** (both confirmed against the reference server):
+
+- **Client key 1.** The server answers −1 (`0xFFFFFFFF`) and encrypts with it. The reference server's own *client* code uses −1 as a "bad key" sentinel and would run unencrypted, which breaks the session. This project follows the server: −1 is a normal key.
+- **Client key `0x80000000`.** Its negation is itself, so the response looks like "no encryption" to a client, yet the reference server keys VIE with it. A client must never offer this key. `oss-net` never generates it (`client_key_from_seed` maps it to `0x80000001`), and `VieAcceptor` encrypts just as the reference server does.
+
+The test vectors in `crates/oss-net/tests/vectors/vie.txt` come from running the reference VIE module unmodified. They cover key exchange, tables and per-packet encryption for 16 keys, including the two above.
 
 ## Continuum (shape only)
 

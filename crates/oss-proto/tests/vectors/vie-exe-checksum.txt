@@ -1,0 +1,36 @@
+# VIE (SubSpace 1.34) exe checksum for the C2S 0x1A security response, from nullspace
+# Checksum.cpp VieChecksum (MIT; same as Subspace Server .NET GetVieExeChecksum).
+# (ASSS's login response sends fixed VIE values exechecksum F1429CE8, codechecksum 281CC948.)
+# exe <checksum key> <exe checksum>
+exe 00000000 281cc948
+exe 00000001 281d1a69
+exe 12345678 aaf36798
+exe 7fffffff 92fe563f
+exe 80000000 281cc948
+exe deadbeef 7463a3cf
+exe ffffffff 92fe563f
+exe a4b00afc 3eb1400c
+exe 5ac60943 35b88c33
+exe b0fb653b 94ff5d83
+exe 3a80c08c 5ec106fc
+exe 09c4adc2 7c3b3896
+exe 27fabe03 ca12c473
+exe f41cfd1d b44e2005
+exe 8214fe19 aed57d69
+exe 828ce72d 0e2d0a95
+exe d55fbd2e 8047d8da
+exe 56d73ecd a073a415
+exe f798bfef 132696cf
+exe 2594f0b9 4bd48869
+exe 6d175c53 7848f0e3
+exe 16ef1c50 91954f38
+exe fe538bfa a5896256
+exe 19c2f207 ed5b0bbf
+exe 06f77b10 1a732b78
+exe ae18fecc 4079593c
+exe 05f30f39 0ff73f69
+exe 921761a0 7946ea48
+exe 810682d9 70f5ec29
+exe b63c63ef 6f2b4acf
+exe 0de28c07 59b615bf
+exe 54f63c23 6d93bf33

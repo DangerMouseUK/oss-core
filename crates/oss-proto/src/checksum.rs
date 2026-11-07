@@ -71,9 +71,11 @@ pub fn counts_for_map_checksum(tile: u8) -> bool {
 /// Map checksum for the security response.
 ///
 /// Samples every 31st column and 32nd row, starting at offsets derived from the
-/// key, and adds `key ^ tile` for each counted tile. `tile(x, y)` must return 0
-/// for coordinates outside 0..1024: the key is treated as a signed integer, so
-/// for keys with the top bit set the start offsets are negative.
+/// key, and adds `key ^ tile` for each counted tile. The key is treated as a
+/// signed integer, so for keys with the top bit set the start offsets are
+/// negative; like the reference server, coordinates then wrap modulo 1024, so
+/// `tile(x, y)` is always called with `0 <= x, y < 1024`. Big map objects must
+/// already be expanded into the grid (see `oss_formats::Level::server_tile_grid`).
 pub fn map_checksum(key: u32, mut tile: impl FnMut(i32, i32) -> u8) -> u32 {
     let base = key as i32;
     let mut sum = key;
@@ -81,7 +83,7 @@ pub fn map_checksum(key: u32, mut tile: impl FnMut(i32, i32) -> u8) -> u32 {
     while y < 1024 {
         let mut x = base % 31;
         while x < 1024 {
-            let t = tile(x, y);
+            let t = tile(x & 1023, y & 1023);
             if counts_for_map_checksum(t) {
                 sum = sum.wrapping_add(key ^ u32::from(t));
             }
@@ -238,13 +240,16 @@ mod tests {
             map_checksum(key, |x, y| if (x, y) == (3, 1) { 5 } else { 0 }),
             key
         );
-        // Keys with the top bit set start at negative offsets.
-        let mut min = (0, 0);
+        // Keys with the top bit set start at negative offsets, which wrap.
+        let mut seen = (1024, 1024, 0, 0);
         map_checksum(0x8000_0001, |x, y| {
-            min = (min.0.min(x), min.1.min(y));
+            seen = (seen.0.min(x), seen.1.min(y), seen.2.max(x), seen.3.max(y));
             0
         });
-        assert!(min.0 < 0 && min.1 < 0);
+        assert!(seen.0 >= 0 && seen.1 >= 0 && seen.2 < 1024 && seen.3 < 1024);
+        // 0x80000001 as i32 % 31 == -1, so column 1023 is sampled first.
+        let c = map_checksum(0x8000_0001, |x, _| u8::from(x == 1023));
+        assert_ne!(c, 0x8000_0001);
     }
 
     #[test]

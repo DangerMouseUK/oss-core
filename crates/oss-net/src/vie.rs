@@ -72,6 +72,16 @@ impl VieCipher {
         self.key
     }
 
+    /// The 520-byte keystream table (little-endian words), for diagnostics and
+    /// test vectors.
+    pub fn table_bytes(&self) -> [u8; 520] {
+        let mut out = [0; 520];
+        for (o, w) in out.as_chunks_mut::<4>().0.iter_mut().zip(&self.table) {
+            *o = w.to_le_bytes();
+        }
+        out
+    }
+
     fn start(data: &[u8]) -> usize {
         if data.first() == Some(&0) { 2 } else { 1 }
     }

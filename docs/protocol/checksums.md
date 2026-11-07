@@ -17,8 +17,10 @@ When S2C `0x18` carries a non-zero key, the client answers C2S `0x1A` with the f
 - **Settings checksum.** Read the 1428-byte settings packet (type byte included) as 357 little-endian `u32` words and sum `word XOR key` over them (wrapping).
 - **Map checksum.** Treat the key as a signed 32-bit integer `k`.
   - Start with the sum equal to the key.
-  - Visit rows `y = k mod 32, k mod 32 + 32, …` and columns `x = k mod 31, k mod 31 + 31, …`, all below 1024. The modulo truncates, so it is negative for negative keys; positions outside the map count as empty.
+  - Visit rows `y = k mod 32, k mod 32 + 32, …` and columns `x = k mod 31, k mod 31 + 31, …`, all below 1024. The modulo truncates, so the starting row and column are negative for negative keys. The reference server then wraps coordinates modulo 1024, so x = −1 reads column 1023. Whether Continuum clients do the same is unconfirmed.
+  - The grid is the *server view* of the map. Big objects are expanded over their area: large asteroid (217) 2×2, wormhole (220) 5×5, space station (219) 6×6, anchored at the listed tile and wrapping at the edge.
   - For every visited tile numbered 1–160 or 171 (safe zone), add `key XOR tile` (wrapping).
+  - Vectors: `crates/oss-formats/tests/vectors/map-checksum.txt`. The maps themselves are not in the repository.
 - **Map CRC (Continuum only).** A CRC over the dense 1024 × 1024 tile array in row-major order, skipping every tile that is not 1–160 or 171. It uses the CRC-32 table, starts at `0xFFFFFFFF` and has no final inversion.
 - **Exe checksum (SubSpace clients).** A fixed function of the key: eight groups of constants, each combined by alternately adding `(constant OR key)` and XORing `(constant XOR key)`, summed with a final constant. The implementation and test vectors are in `oss-proto::checksum::vie_exe_checksum`. Continuum clients report a checksum of their own executable instead.
 

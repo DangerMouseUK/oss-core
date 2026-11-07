@@ -82,6 +82,47 @@ pub struct Level {
     pub trailing: Vec<u8>,
 }
 
+/// Notable tile numbers.
+pub mod tile {
+    /// First normal (solid) tile.
+    pub const FIRST_NORMAL: u8 = 1;
+    /// Last normal tile.
+    pub const LAST_NORMAL: u8 = 160;
+    /// First vertical door tile.
+    pub const V_DOOR_START: u8 = 162;
+    /// First horizontal door tile.
+    pub const H_DOOR_START: u8 = 166;
+    /// Turf (static) flag.
+    pub const TURF_FLAG: u8 = 170;
+    /// Safe zone.
+    pub const SAFE: u8 = 171;
+    /// Soccer goal.
+    pub const GOAL: u8 = 172;
+    /// Small asteroid.
+    pub const SMALL_ASTEROID: u8 = 216;
+    /// Large asteroid (2x2 tiles).
+    pub const BIG_ASTEROID: u8 = 217;
+    /// Small asteroid, second kind.
+    pub const SMALL_ASTEROID2: u8 = 218;
+    /// Space station (6x6 tiles).
+    pub const STATION: u8 = 219;
+    /// Wormhole (5x5 tiles).
+    pub const WORMHOLE: u8 = 220;
+    /// Brick (placed by players at run time).
+    pub const BRICK: u8 = 250;
+}
+
+/// Counts from [`Level::server_tile_grid`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GridStats {
+    /// Non-empty cells after expansion.
+    pub non_empty: usize,
+    /// Turf flag tiles.
+    pub turf_flags: usize,
+    /// Tile entries outside the map (ignored).
+    pub out_of_range: usize,
+}
+
 /// A dense 1024x1024 grid of tile types (1 MiB), indexed `[y * 1024 + x]`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct TileGrid {
@@ -256,6 +297,49 @@ impl Level {
         }
         grid.apply(self.tiles.iter().copied());
         grid
+    }
+
+    /// Builds the grid the way servers see the map: like [`Level::tile_grid`], but
+    /// big objects cover their whole area (large asteroid 2x2, wormhole 5x5,
+    /// space station 6x6, anchored at the listed tile and wrapping at the map
+    /// edge). Use this grid for the security map checksum and for collision.
+    pub fn server_tile_grid(&self) -> (TileGrid, GridStats) {
+        let mut grid = TileGrid::new();
+        let mut stats = GridStats::default();
+        let mut apply = |tiles: &[TileEntry]| {
+            for t in tiles {
+                if usize::from(t.x) >= MAP_SIZE || usize::from(t.y) >= MAP_SIZE {
+                    stats.out_of_range += 1;
+                    continue;
+                }
+                if t.tile == tile::TURF_FLAG {
+                    stats.turf_flags += 1;
+                }
+                let size = match t.tile {
+                    tile::BIG_ASTEROID => 2,
+                    tile::STATION => 6,
+                    tile::WORMHOLE => 5,
+                    _ => 1,
+                };
+                for dy in 0..size {
+                    for dx in 0..size {
+                        let x = (u32::from(t.x) + dx) & 1023;
+                        let y = (u32::from(t.y) + dy) & 1023;
+                        grid.set(x, y, t.tile);
+                    }
+                }
+            }
+        };
+        if let Some(m) = &self.metadata {
+            for c in &m.chunks {
+                if let Chunk::TileData(d) = c {
+                    apply(&parse_tile_list(d).0);
+                }
+            }
+        }
+        apply(&self.tiles);
+        stats.non_empty = grid.cells().iter().filter(|&&t| t != 0).count();
+        (grid, stats)
     }
 
     /// Replaces the tile list with the grid's non-empty tiles, row by row.

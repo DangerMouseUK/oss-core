@@ -15,6 +15,6 @@ pub mod region;
 
 pub use elvl::{AutoWarp, Chunk, Metadata, Region, RegionChunk};
 pub use error::FormatError;
-pub use lvl::{Level, MAP_SIZE, TileEntry, TileGrid, Tileset};
+pub use lvl::{GridStats, Level, MAP_SIZE, TileEntry, TileGrid, Tileset};
 pub use lvz::{ImageDef, Lvz, ObjectSection, Section};
 pub use region::RegionBitmap;
