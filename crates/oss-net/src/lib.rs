@@ -50,3 +50,7 @@ pub use connection::{
 };
 pub use server::Server;
 pub use vie::VieCipher;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

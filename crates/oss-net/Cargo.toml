@@ -1,11 +1,16 @@
 [package]
 name = "oss-net"
-description = "Sans-IO SubSpace transport: reliable layer, clustering, file transfer, ciphers"
+description = "Sans-IO SubSpace/Continuum transport: reliable delivery, clustering, file transfers, VIE and OpenSec encryption"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/oss-net"
+readme = "README.md"
+keywords = ["subspace", "continuum", "gamedev", "netcode", "sans-io"]
+categories = ["game-development", "network-programming", "cryptography"]
 
 [features]
 default = ["opensec", "os-entropy"]
@@ -32,3 +37,6 @@ criterion = { version = "0.8.2", default-features = false }
 name = "transport"
 harness = false
 
+
+[package.metadata.docs.rs]
+all-features = true

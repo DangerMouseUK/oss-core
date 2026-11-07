@@ -20,3 +20,7 @@ pub use lvl::{GridStats, Level, MAP_SIZE, TileEntry, TileGrid, Tileset};
 pub use lvz::{ImageDef, Lvz, ObjectSection, Section};
 pub use region::RegionBitmap;
 pub use replay::{Record, RecordKind, Replay};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -42,3 +42,7 @@ pub use rng::VieRng;
 pub use s2c::S2CPacket;
 pub use settings::{ClientSettings, ShipSettings, SpawnPosition};
 pub use wire::{FixedStr, Packet};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### Packaging
+- crates.io-ready metadata for each crate: keywords, categories, homepage and documentation links, a README (its example compiles as a doctest), a LICENSE file, and docs.rs `all-features` for `oss-net`.
+- `cargo package --workspace` passes.
+- CI gains three jobs:
+  - feature combinations and wasm32 checks;
+  - an MSRV (1.88) check;
+  - a packaging check.
+
 ### oss-net (OpenSec)
 - `opensec` module, behind the default feature `opensec`. Specification: `docs/protocol/opensec.md`; vectors: `tests/vectors/opensec.txt`.
   - Server side: `OpenSecAcceptor::new(Option<ServerKey>, Entropy)`; `ServerKey` provides `from_secret`, `generate`, `public` and `secret_bytes`.

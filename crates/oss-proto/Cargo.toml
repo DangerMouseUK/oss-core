@@ -1,11 +1,16 @@
 [package]
 name = "oss-proto"
-description = "SubSpace/Continuum wire protocol: packet types and codecs"
+description = "SubSpace/Continuum wire protocol: game, transport, directory and billing packet codecs, settings and checksums"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/oss-proto"
+readme = "README.md"
+keywords = ["subspace", "continuum", "gamedev", "protocol", "codec"]
+categories = ["game-development", "network-programming", "encoding", "no-std"]
 
 [dependencies]
 
