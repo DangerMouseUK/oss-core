@@ -4,6 +4,12 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (send options)
+- `Connection::send_with(&[u8], SendFlags)` and `Server::send_with`. `SendFlags { reliable, priority: Priority::{Low, Normal, High, Urgent}, droppable }`, plus the constants `SendFlags::RELIABLE` and `UNRELIABLE`.
+  - Unreliable packets flush in priority order.
+  - `Urgent` is sent at once in its own datagram.
+- `Config::unreliable_budget: Option<usize>` caps unreliable bytes per flush. When the budget runs out, droppable packets are discarded (counted in `Stats::dropped_outgoing`) and the rest wait for the next flush. `send(p, reliable)` is unchanged.
+
 ### Map vectors, deny
 - Synthetic map-checksum vectors run in CI with no binary fixtures: `tests/synthetic_maps.rs` regenerates the four seeded maps (verified against the recorded size and CRC-32). `smallmap.lvl`, the reference server's default map, is a committed fixture with its 33 vectors.
 - **Behaviour change:** `Level::to_bytes` no longer pads the tileset before the eLVL section, so files whose metadata starts at an unaligned offset rewrite byte for byte. For new files, build the tileset with `Tileset::from_bitmap(&bmp)`, which pads to 4 bytes.

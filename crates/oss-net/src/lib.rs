@@ -43,6 +43,8 @@ pub use cipher::{
     Accept, Acceptor, Cipher, CipherContext, CipherKind, Handshake, NullAcceptor, NullCipher, Step,
     VieAcceptor, VieClientHandshake,
 };
-pub use connection::{Config, Connection, DisconnectReason, Event, Stats, TransferId, ticks};
+pub use connection::{
+    Config, Connection, DisconnectReason, Event, Priority, SendFlags, Stats, TransferId, ticks,
+};
 pub use server::Server;
 pub use vie::VieCipher;

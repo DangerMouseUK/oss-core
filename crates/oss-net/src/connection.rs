@@ -47,6 +47,10 @@ pub struct Config {
     pub sync_interval_ms: Option<u64>,
     /// Disconnect if more than this many packets are queued for sending.
     pub max_queue: usize,
+    /// Unreliable bytes sent per flush before lower-priority traffic waits and
+    /// droppable packets are discarded; `None` for no limit. A crude bandwidth
+    /// cap: at a 10 ms flush interval, 1300 bytes is about 1 Mbit/s.
+    pub unreliable_budget: Option<usize>,
 }
 
 impl Config {
@@ -76,6 +80,7 @@ impl Config {
             sized_batch: 25,
             sync_interval_ms: None,
             max_queue: 500,
+            unreliable_budget: None,
         }
     }
 }
@@ -150,6 +155,50 @@ pub struct Stats {
     pub duplicates: u64,
     /// Datagrams dropped as malformed, out of window or undecryptable.
     pub dropped: u64,
+    /// Outgoing droppable packets discarded because of the unreliable budget.
+    pub dropped_outgoing: u64,
+}
+
+/// Priority of an unreliable packet within a flush.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Priority {
+    /// Sent after everything else (e.g. bulk updates).
+    Low,
+    /// Normal traffic.
+    #[default]
+    Normal,
+    /// Sent before normal traffic (e.g. weapons fire).
+    High,
+    /// Sent immediately in its own datagram, bypassing clustering and the
+    /// budget (e.g. time-critical position updates).
+    Urgent,
+}
+
+/// Delivery options for [`Connection::send_with`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SendFlags {
+    /// Deliver reliably and in order (priority and droppable are ignored).
+    pub reliable: bool,
+    /// Ordering of unreliable packets.
+    pub priority: Priority,
+    /// May be discarded when [`Config::unreliable_budget`] is exhausted
+    /// instead of waiting for the next flush.
+    pub droppable: bool,
+}
+
+impl SendFlags {
+    /// Reliable delivery.
+    pub const RELIABLE: Self = Self {
+        reliable: true,
+        priority: Priority::Normal,
+        droppable: false,
+    };
+    /// Unreliable, normal priority.
+    pub const UNRELIABLE: Self = Self {
+        reliable: false,
+        priority: Priority::Normal,
+        droppable: false,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,7 +367,9 @@ pub struct Connection {
     acks: Vec<i32>,
     pool: Pool,
     // Unreliable send.
-    unreliable: VecDeque<Vec<u8>>,
+    /// Unreliable queues by priority: high, normal, low. Entries carry the
+    /// droppable flag.
+    unreliable: [VecDeque<(Vec<u8>, bool)>; 3],
     // Big data receive.
     big: Vec<u8>,
     big_overflow: bool,
@@ -375,7 +426,7 @@ impl Connection {
             rtt_dev: 100,
             expected: 0,
             acks: Vec::new(),
-            unreliable: VecDeque::new(),
+            unreliable: Default::default(),
             big: Vec::new(),
             big_overflow: false,
             sized_out: VecDeque::new(),
@@ -522,18 +573,41 @@ impl Connection {
     /// Queues a game packet (or core packet) for sending. Packets too large for
     /// one datagram are always sent reliably, split into big-data chunks.
     pub fn send(&mut self, packet: &[u8], reliable: bool) {
+        let flags = if reliable {
+            SendFlags::RELIABLE
+        } else {
+            SendFlags::UNRELIABLE
+        };
+        self.send_with(packet, flags);
+    }
+
+    /// Queues a packet with explicit delivery options (priority, droppable,
+    /// urgent). Packets too large for one datagram are always sent reliably.
+    pub fn send_with(&mut self, packet: &[u8], flags: SendFlags) {
         if packet.is_empty() || self.is_closed() {
             return;
         }
         if packet.len() + 6 > self.cfg.max_send {
             self.send_big(packet);
-        } else if reliable {
+        } else if flags.reliable {
             let b = self.pool.copy_of(packet);
             self.pending.push_back((b, Tag::None));
-        } else {
+        } else if flags.priority == Priority::Urgent && self.is_connected() {
             let b = self.pool.copy_of(packet);
-            self.unreliable.push_back(b);
+            self.emit(b);
+        } else {
+            let q = match flags.priority {
+                Priority::High | Priority::Urgent => 0,
+                Priority::Normal => 1,
+                Priority::Low => 2,
+            };
+            let b = self.pool.copy_of(packet);
+            self.unreliable[q].push_back((b, flags.droppable));
         }
+    }
+
+    fn unreliable_len(&self) -> usize {
+        self.unreliable.iter().map(VecDeque::len).sum()
     }
 
     fn send_big(&mut self, packet: &[u8]) {
@@ -592,7 +666,7 @@ impl Connection {
         self.state = State::Closed;
         self.pending.clear();
         self.in_flight.clear();
-        self.unreliable.clear();
+        self.unreliable.iter_mut().for_each(VecDeque::clear);
         self.sized_out.clear();
         self.transmit.clear();
         if notify_peer && was_connected {
@@ -682,7 +756,7 @@ impl Connection {
             if reliable {
                 self.pending.push_back((p, Tag::Cipher));
             } else {
-                self.unreliable.push_back(p);
+                self.unreliable[1].push_back((p, false));
             }
         }
     }
@@ -940,11 +1014,11 @@ impl Connection {
             p.extend_from_slice(&ticks(now).to_le_bytes());
             p.extend_from_slice(&(self.stats.datagrams_sent as u32 + 1).to_le_bytes());
             p.extend_from_slice(&(self.stats.datagrams_received as u32).to_le_bytes());
-            self.unreliable.push_back(p);
+            self.unreliable[0].push_back((p, false));
             self.next_sync = Some(now + interval);
         }
         self.refill_sized();
-        if self.pending.len() + self.in_flight.len() + self.unreliable.len() > self.cfg.max_queue {
+        if self.pending.len() + self.in_flight.len() + self.unreliable_len() > self.cfg.max_queue {
             self.close(DisconnectReason::QueueOverflow, true);
             return;
         }
@@ -1059,9 +1133,24 @@ impl Connection {
             r.last_sent = now;
             packer.add(&r.datagram, &mut em);
         }
-        while let Some(u) = self.unreliable.pop_front() {
-            packer.add(&u, &mut em);
-            em.pool.put(u);
+        let mut budget = self.cfg.unreliable_budget.unwrap_or(usize::MAX);
+        for q in &mut self.unreliable {
+            while let Some((u, droppable)) = q.pop_front() {
+                if u.len() > budget {
+                    if droppable {
+                        em.stats.dropped_outgoing += 1;
+                        em.pool.put(u);
+                        continue;
+                    }
+                    // Wait for the next flush; lower priorities wait too.
+                    q.push_front((u, droppable));
+                    budget = 0;
+                    break;
+                }
+                budget -= u.len();
+                packer.add(&u, &mut em);
+                em.pool.put(u);
+            }
         }
         packer.finish(&mut em);
         em.pool.put(packer.cur);
@@ -1081,7 +1170,7 @@ impl Connection {
         for r in &self.in_flight {
             t = t.min(r.last_sent + u64::from(r.sends.max(1)) * rto);
         }
-        if !self.pending.is_empty() || !self.unreliable.is_empty() || !self.acks.is_empty() {
+        if !self.pending.is_empty() || self.unreliable_len() > 0 || !self.acks.is_empty() {
             t = 0;
         }
         if matches!(self.state, State::Handshaking(_)) {

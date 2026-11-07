@@ -183,6 +183,18 @@ impl<A: Eq + Hash + Clone> Server<A> {
         }
     }
 
+    /// Queues a packet with explicit delivery options (see
+    /// [`Connection::send_with`]).
+    pub fn send_with(&mut self, to: &A, packet: &[u8], flags: crate::SendFlags) -> bool {
+        match self.conns.get_mut(to) {
+            Some(c) => {
+                c.send_with(packet, flags);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Access to a connection (to send, start sized transfers, read stats...).
     /// Output it produces is collected on the next [`Server::tick`] or datagram.
     pub fn connection_mut(&mut self, addr: &A) -> Option<&mut Connection> {
