@@ -4,7 +4,38 @@
 //! acknowledgements, clustering, chunked and sized transfers, time sync and the
 //! pluggable packet ciphers. Callers feed datagrams in and pull datagrams out; the
 //! same state machine serves clients, servers and bots, native and wasm.
+//!
+//! * [`Connection`]: one peer (client or server end).
+//! * [`Server`]: many connections keyed by address, with [`Acceptor`]s choosing
+//!   the encryption from each client's first datagram.
+//! * [`cipher`]: the [`Cipher`] / [`Handshake`] / [`Acceptor`] plug-in traits, plus
+//!   null and VIE implementations ([`VieAcceptor`], [`VieClientHandshake`]).
+//!
+//! A minimal client loop:
+//!
+//! ```
+//! use oss_net::{Config, Connection, Event, VieClientHandshake};
+//!
+//! let mut conn = Connection::client(Config::client(), Box::new(VieClientHandshake::new(42)), 0);
+//! // The first datagram (00 01 ...) is ready to send.
+//! let first = conn.poll_transmit().unwrap();
+//! assert_eq!(&first[..2], &[0x00, 0x01]);
+//! // ... send it, feed replies with conn.handle_datagram(now, &bytes),
+//! // call conn.tick(now) every ~10 ms, and drain conn.poll_event():
+//! while let Some(event) = conn.poll_event() {
+//!     if let Event::Packet(p) = event { let _ = p; }
+//! }
+//! ```
 
+pub mod cipher;
+mod connection;
+mod server;
 pub mod vie;
 
+pub use cipher::{
+    Accept, Acceptor, Cipher, CipherContext, Handshake, NullAcceptor, NullCipher, Step,
+    VieAcceptor, VieClientHandshake,
+};
+pub use connection::{Config, Connection, DisconnectReason, Event, Stats, TransferId, ticks};
+pub use server::Server;
 pub use vie::VieCipher;
