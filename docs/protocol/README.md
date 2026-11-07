@@ -14,6 +14,6 @@ A versioned, implementation-driven description of the SubSpace/Continuum network
 | [directory.md](directory.md) | zone registration, pings and zone lists |
 | [billing.md](billing.md) | zone ↔ billing server packets |
 
-File formats are documented in [../formats](../formats): [`.lvl` and eLVL](../formats/lvl.md), [`.lvz`](../formats/lvz.md).
+File formats are documented in [../formats](../formats): [`.lvl` and eLVL](../formats/lvl.md), [`.lvz`](../formats/lvz.md), [`.ossr` replays](../formats/replay.md).
 
 Where sources disagree, the pages say so and give the reading this project implements.

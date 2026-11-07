@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-formats (replay)
+- `replay`: `.ossr` replay files.
+  - Types: `Replay { records, truncated }` and `Record { kind: RecordKind, time_ms, data }`.
+  - Record kinds: `Meta`, `ServerPacket`, `ClientPacket`, `File`, `Marker`, `Other(u8)`.
+  - Reading: `Replay::parse` handles plain or zlib bodies and tolerates truncation. Helpers: `meta_value`, `files`, `duration_ms`, `seek`.
+  - Writing: `to_bytes(compress)`. A streaming recorder uses `header(flags)` and `write_record(..)`.
+- Docs: `docs/formats/replay.md`.
+
 ### oss-proto (directory, billing)
 - `directory`: `ZoneUpdate` (server registration datagram, with an `is_acceptable()` check that mirrors directory servers), `DirPing`/`DirPong`, `ZoneListRequest`, `ZoneList`/`ZoneEntry`. Default ports `CLIENT_PORT` (4990) and `UPDATE_PORT` (4991).
 - `billing`: `ServerToBiller` and `BillerToServer` enums covering every documented packet, plus `UserLogin`, `BillerLogin`, `PlayerScore` and the `login_result` codes. Each enum has `decode`, `encode` and `to_bytes`, with `Unknown` as the fallback.
