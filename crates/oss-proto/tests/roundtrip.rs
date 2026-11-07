@@ -652,5 +652,9 @@ fn decoders_never_panic() {
             }
         });
         let _ = ClientSettings::decode(&buf);
+        let _ = oss_proto::billing::ServerToBiller::decode(&buf);
+        let _ = oss_proto::billing::BillerToServer::decode(&buf);
+        let _ = oss_proto::directory::ZoneUpdate::decode(&buf);
+        let _ = oss_proto::directory::ZoneList::decode(&buf);
     }
 }

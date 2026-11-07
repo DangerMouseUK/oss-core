@@ -11,6 +11,8 @@ A versioned, implementation-driven description of the SubSpace/Continuum network
 | [game-packets.md](game-packets.md) | every server-to-client and client-to-server game packet |
 | [settings.md](settings.md) | the 1428-byte arena settings packet and its configuration keys |
 | [checksums.md](checksums.md) | file, position and security checksums; the game RNG |
+| [directory.md](directory.md) | zone registration, pings and zone lists |
+| [billing.md](billing.md) | zone ↔ billing server packets |
 
 File formats are documented in [../formats](../formats): [`.lvl` and eLVL](../formats/lvl.md), [`.lvz`](../formats/lvz.md).
 

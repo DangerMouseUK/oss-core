@@ -4,6 +4,11 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (directory, billing)
+- `directory`: `ZoneUpdate` (server registration datagram, with an `is_acceptable()` check that mirrors directory servers), `DirPing`/`DirPong`, `ZoneListRequest`, `ZoneList`/`ZoneEntry`. Default ports `CLIENT_PORT` (4990) and `UPDATE_PORT` (4991).
+- `billing`: `ServerToBiller` and `BillerToServer` enums covering every documented packet, plus `UserLogin`, `BillerLogin`, `PlayerScore` and the `login_result` codes. Each enum has `decode`, `encode` and `to_bytes`, with `Unknown` as the fallback.
+- Docs: `docs/protocol/directory.md`, `docs/protocol/billing.md`.
+
 ### oss-net (send options)
 - `Connection::send_with(&[u8], SendFlags)` and `Server::send_with`. `SendFlags { reliable, priority: Priority::{Low, Normal, High, Urgent}, droppable }`, plus the constants `SendFlags::RELIABLE` and `UNRELIABLE`.
   - Unreliable packets flush in priority order.

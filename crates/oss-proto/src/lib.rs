@@ -10,15 +10,19 @@
 //!   dispatch enums; [`position`] and [`common`] hold shared structures.
 //! * [`control`]: the `0x00` transport packets ([`CorePacket`]).
 //! * [`objects`]: LVZ object records.
+//! * [`directory`] and [`billing`]: the directory-server and billing-server
+//!   protocols.
 //! * [`wire`]: reader/writer helpers, [`Packet`] and [`FixedStr`].
 #![no_std]
 
 extern crate alloc;
 
+pub mod billing;
 pub mod c2s;
 pub mod checksum;
 pub mod common;
 pub mod control;
+pub mod directory;
 mod error;
 pub mod objects;
 pub mod position;
