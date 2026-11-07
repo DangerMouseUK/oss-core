@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use oss_formats::Level;
+use oss_formats::{Level, Lvz};
 
 fn collect(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -64,6 +64,41 @@ fn lvl_files_round_trip() {
         );
         assert!(
             lvl.to_bytes() == data,
+            "{}: rewrite differs",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn lvz_files_round_trip() {
+    for path in files("lvz") {
+        let data = std::fs::read(&path).unwrap();
+        let lvz = Lvz::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut objects = 0;
+        for s in &lvz.sections {
+            let d = s
+                .data()
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            if s.is_object_section() {
+                let o = oss_formats::ObjectSection::parse(&d)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                assert_eq!(
+                    o.to_bytes(),
+                    d,
+                    "{}: object section rewrite",
+                    path.display()
+                );
+                objects += o.objects.len();
+            }
+        }
+        println!(
+            "{}: sections={} objects={objects}",
+            path.display(),
+            lvz.sections.len()
+        );
+        assert!(
+            lvz.to_bytes() == data,
             "{}: rewrite differs",
             path.display()
         );

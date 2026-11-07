@@ -10,9 +10,11 @@ extern crate alloc;
 pub mod elvl;
 mod error;
 pub mod lvl;
+pub mod lvz;
 pub mod region;
 
 pub use elvl::{AutoWarp, Chunk, Metadata, Region, RegionChunk};
 pub use error::FormatError;
 pub use lvl::{Level, MAP_SIZE, TileEntry, TileGrid, Tileset};
+pub use lvz::{ImageDef, Lvz, ObjectSection, Section};
 pub use region::RegionBitmap;

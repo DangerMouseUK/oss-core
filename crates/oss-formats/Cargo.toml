@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+oss-proto.workspace = true
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 
 [lints]
 workspace = true

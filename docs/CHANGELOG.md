@@ -18,3 +18,8 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 - `checksum`: `crc32`, `crc32_update`, `position_checksum`, `settings_checksum(key, &packet_bytes)`, `map_checksum(key, |x, y| tile)`, `map_crc32(&grid_cells)`, `vie_exe_checksum(key)`.
 - `wire::{Reader, Writer}`, `FixedStr<N>` (NUL-padded text fields, raw bytes preserved).
 - Crate is `no_std` + `alloc`.
+
+### oss-formats (lvz)
+- `Lvz::parse` / `to_bytes` (byte-exact; compressed bytes kept as stored), `Section { name, file_time, decompressed_size, stored }`, `Section::data()` (inflate), `Section::new(name, time, data)` (deflate), `Section::objects(&ObjectSection)`, `Lvz::object_sections()`.
+- `ObjectSection { version, objects: Vec<ObjectData>, images: Vec<ImageDef> }`. `ObjectData` is `oss_proto::ObjectData` (re-exported), with accessors for map/screen coordinates, layer, mode, display time.
+- New dependencies: `oss-proto`, `miniz_oxide` 0.8 (MIT/Zlib/Apache-2.0, `no_std` + alloc).

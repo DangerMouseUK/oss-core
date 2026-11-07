@@ -14,12 +14,14 @@ extern crate alloc;
 pub mod checksum;
 pub mod control;
 mod error;
+pub mod objects;
 pub mod position;
 pub mod settings;
 pub mod wire;
 
 pub use control::CorePacket;
 pub use error::DecodeError;
+pub use objects::ObjectData;
 pub use position::{C2SPosition, ExtraPositionData, S2CPosition, S2CWeapon, WeaponInfo};
 pub use settings::{ClientSettings, ShipSettings, SpawnPosition};
 pub use wire::{FixedStr, Packet};
