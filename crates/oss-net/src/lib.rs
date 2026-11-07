@@ -20,12 +20,19 @@
 //! // The first datagram (00 01 ...) is ready to send.
 //! let first = conn.poll_transmit().unwrap();
 //! assert_eq!(&first[..2], &[0x00, 0x01]);
-//! // ... send it, feed replies with conn.handle_datagram(now, &bytes),
+//! conn.recycle(first); // after sending it
+//! // ... feed replies with conn.handle_datagram(now, &bytes),
 //! // call conn.tick(now) every ~10 ms, and drain conn.poll_event():
 //! while let Some(event) = conn.poll_event() {
-//!     if let Event::Packet(p) = event { let _ = p; }
+//!     if let Event::Packet(p) = event {
+//!         // handle the game packet, then hand the buffer back
+//!         conn.recycle(p);
+//!     }
 //! }
 //! ```
+//!
+//! Recycling buffers is optional, but with it a connection performs no heap
+//! allocations per packet once warmed up.
 
 pub mod cipher;
 mod connection;
@@ -33,7 +40,7 @@ mod server;
 pub mod vie;
 
 pub use cipher::{
-    Accept, Acceptor, Cipher, CipherContext, Handshake, NullAcceptor, NullCipher, Step,
+    Accept, Acceptor, Cipher, CipherContext, CipherKind, Handshake, NullAcceptor, NullCipher, Step,
     VieAcceptor, VieClientHandshake,
 };
 pub use connection::{Config, Connection, DisconnectReason, Event, Stats, TransferId, ticks};

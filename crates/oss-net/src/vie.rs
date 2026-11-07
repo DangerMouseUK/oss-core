@@ -98,11 +98,18 @@ impl VieCipher {
             return;
         }
         let mut work = self.key;
-        for (i, chunk) in data[start..].chunks_mut(4).enumerate() {
+        let (words, tail) = data[start..].as_chunks_mut::<4>();
+        let mut table = self.table.iter().cycle();
+        for w in words.iter_mut() {
+            work ^= u32::from_le_bytes(*w) ^ table.next().copied().unwrap_or(0);
+            *w = work.to_le_bytes();
+        }
+        if !tail.is_empty() {
             let mut w = [0u8; 4];
-            w[..chunk.len()].copy_from_slice(chunk);
-            work ^= u32::from_le_bytes(w) ^ self.table(i);
-            chunk.copy_from_slice(&work.to_le_bytes()[..chunk.len()]);
+            w[..tail.len()].copy_from_slice(tail);
+            work ^= u32::from_le_bytes(w) ^ self.table(words.len());
+            let n = tail.len();
+            tail.copy_from_slice(&work.to_le_bytes()[..n]);
         }
     }
 
@@ -113,13 +120,19 @@ impl VieCipher {
             return;
         }
         let mut work = self.key;
-        for (i, chunk) in data[start..].chunks_mut(4).enumerate() {
-            let mut w = [0u8; 4];
-            w[..chunk.len()].copy_from_slice(chunk);
-            let c = u32::from_le_bytes(w);
-            let p = c ^ work ^ self.table(i);
+        let (words, tail) = data[start..].as_chunks_mut::<4>();
+        let mut table = self.table.iter().cycle();
+        for w in words.iter_mut() {
+            let c = u32::from_le_bytes(*w);
+            *w = (c ^ work ^ table.next().copied().unwrap_or(0)).to_le_bytes();
             work = c;
-            chunk.copy_from_slice(&p.to_le_bytes()[..chunk.len()]);
+        }
+        if !tail.is_empty() {
+            let mut w = [0u8; 4];
+            w[..tail.len()].copy_from_slice(tail);
+            let p = u32::from_le_bytes(w) ^ work ^ self.table(words.len());
+            let n = tail.len();
+            tail.copy_from_slice(&p.to_le_bytes()[..n]);
         }
     }
 }

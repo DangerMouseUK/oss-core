@@ -8,9 +8,9 @@
 //! (connection state and received game packets). Time is a caller-supplied
 //! monotonic millisecond counter.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
-use crate::cipher::{Accept, Cipher, CipherContext, Handshake, Step};
+use crate::cipher::{Accept, Cipher, CipherContext, CipherKind, Handshake, Step};
 
 /// Tunables. Defaults interoperate with existing servers and clients.
 #[derive(Debug, Clone)]
@@ -190,6 +190,108 @@ enum State {
 /// Maximum nesting of clusters/reliables processed recursively.
 const MAX_DEPTH: u32 = 4;
 
+/// Capacity of pooled buffers: a full datagram plus cipher overhead.
+const BUF_CAPACITY: usize = 576;
+/// Most buffers kept for reuse per connection.
+const POOL_LIMIT: usize = 256;
+
+/// Free buffers, reused so a busy connection does not allocate per packet.
+#[derive(Debug, Default)]
+pub(crate) struct Pool {
+    free: Vec<Vec<u8>>,
+}
+
+impl Pool {
+    fn take(&mut self) -> Vec<u8> {
+        self.free
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(BUF_CAPACITY))
+    }
+
+    fn copy_of(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut b = self.take();
+        b.extend_from_slice(data);
+        b
+    }
+
+    pub(crate) fn put(&mut self, mut b: Vec<u8>) {
+        if self.free.len() < POOL_LIMIT && b.capacity() >= BUF_CAPACITY && b.capacity() <= 4096 {
+            b.clear();
+            self.free.push(b);
+        }
+    }
+
+    /// Moves buffers from `other` until this pool holds `target` (or `other`
+    /// runs out).
+    pub(crate) fn refill_from(&mut self, other: &mut Pool, target: usize) {
+        while self.free.len() < target {
+            let Some(b) = other.free.pop() else { break };
+            self.free.push(b);
+        }
+    }
+}
+
+/// Encrypts and queues datagrams; borrows only the fields it needs so callers
+/// can iterate other parts of the connection at the same time.
+struct Emitter<'a> {
+    cipher: &'a mut Option<Box<dyn Cipher>>,
+    stats: &'a mut Stats,
+    transmit: &'a mut VecDeque<Vec<u8>>,
+    pool: &'a mut Pool,
+}
+
+impl Emitter<'_> {
+    fn emit(&mut self, mut datagram: Vec<u8>) {
+        if let Some(c) = self.cipher {
+            c.encrypt(&mut datagram);
+        }
+        self.stats.datagrams_sent += 1;
+        self.stats.bytes_sent += datagram.len() as u64;
+        self.transmit.push_back(datagram);
+    }
+}
+
+/// Packs items into cluster datagrams (unwrapping single items).
+struct Packer {
+    cur: Vec<u8>,
+    count: usize,
+    max: usize,
+}
+
+impl Packer {
+    fn add(&mut self, item: &[u8], em: &mut Emitter<'_>) {
+        if item.len() > 255 {
+            let b = em.pool.copy_of(item);
+            em.emit(b);
+            return;
+        }
+        if self.count > 0 && self.cur.len() + 1 + item.len() > self.max {
+            self.finish(em);
+        }
+        if self.count == 0 {
+            self.cur.clear();
+            self.cur.extend_from_slice(&[0, 0x0E]);
+        }
+        self.cur.push(item.len() as u8);
+        self.cur.extend_from_slice(item);
+        self.count += 1;
+    }
+
+    fn finish(&mut self, em: &mut Emitter<'_>) {
+        match self.count {
+            0 => return,
+            1 => {
+                // A lone item goes out bare: drop the `00 0E len` prefix.
+                self.cur.drain(..3);
+            }
+            _ => {}
+        }
+        let next = em.pool.take();
+        em.emit(std::mem::replace(&mut self.cur, next));
+        self.count = 0;
+    }
+}
+
 /// Server time in ticks (1/100 s), 31 bits as the protocol uses.
 pub fn ticks(now_ms: u64) -> u32 {
     ((now_ms / 10) as u32) & 0x7FFF_FFFF
@@ -200,6 +302,7 @@ pub struct Connection {
     cfg: Config,
     state: State,
     cipher: Option<Box<dyn Cipher>>,
+    connect_protocol: Option<u16>,
     last_recv: u64,
     session_started: bool,
     // Reliable send.
@@ -208,10 +311,12 @@ pub struct Connection {
     in_flight: VecDeque<InFlight>,
     rtt_avg: u64,
     rtt_dev: u64,
-    // Reliable receive.
+    // Reliable receive: slot `seq % recv_window` holds a payload waiting for
+    // its turn.
     expected: i32,
-    recv_buf: BTreeMap<i32, Vec<u8>>,
+    recv_ring: Vec<Option<Vec<u8>>>,
     acks: Vec<i32>,
+    pool: Pool,
     // Unreliable send.
     unreliable: VecDeque<Vec<u8>>,
     // Big data receive.
@@ -253,10 +358,14 @@ impl core::fmt::Debug for Connection {
 
 impl Connection {
     fn new(cfg: Config, state: State, now: u64) -> Self {
+        let window = cfg.recv_window.max(1) as usize;
         Self {
+            recv_ring: (0..window).map(|_| None).collect(),
+            pool: Pool::default(),
             cfg,
             state,
             cipher: None,
+            connect_protocol: None,
             last_recv: now,
             session_started: false,
             next_seq: 0,
@@ -265,7 +374,6 @@ impl Connection {
             rtt_avg: 200,
             rtt_dev: 100,
             expected: 0,
-            recv_buf: BTreeMap::new(),
             acks: Vec::new(),
             unreliable: VecDeque::new(),
             big: Vec::new(),
@@ -334,6 +442,42 @@ impl Connection {
         self.cipher.as_ref().map(|c| c.name())
     }
 
+    /// Encryption family of the active cipher, if connected. Servers use it to
+    /// tell SubSpace (VIE) clients from Continuum clients.
+    pub fn cipher_kind(&self) -> Option<CipherKind> {
+        self.cipher.as_ref().map(|c| c.kind())
+    }
+
+    /// The protocol word from the client's `00 01` request (0x0001 SubSpace,
+    /// 0x0011 Continuum), on server-side connections created by [`crate::Server`].
+    pub fn connect_protocol(&self) -> Option<u16> {
+        self.connect_protocol
+    }
+
+    pub(crate) fn set_connect_protocol(&mut self, p: Option<u16>) {
+        self.connect_protocol = p;
+    }
+
+    /// Returns a buffer obtained from [`Connection::poll_transmit`] or an
+    /// [`Event::Packet`] so it can be reused. Optional, but recycling every
+    /// buffer keeps a busy connection free of per-packet allocations.
+    pub fn recycle(&mut self, buf: Vec<u8>) {
+        self.pool.put(buf);
+    }
+
+    pub(crate) fn pool_mut(&mut self) -> &mut Pool {
+        &mut self.pool
+    }
+
+    fn emitter(&mut self) -> Emitter<'_> {
+        Emitter {
+            cipher: &mut self.cipher,
+            stats: &mut self.stats,
+            transmit: &mut self.transmit,
+            pool: &mut self.pool,
+        }
+    }
+
     /// Counters.
     pub fn stats(&self) -> Stats {
         self.stats
@@ -384,9 +528,11 @@ impl Connection {
         if packet.len() + 6 > self.cfg.max_send {
             self.send_big(packet);
         } else if reliable {
-            self.pending.push_back((packet.to_vec(), Tag::None));
+            let b = self.pool.copy_of(packet);
+            self.pending.push_back((b, Tag::None));
         } else {
-            self.unreliable.push_back(packet.to_vec());
+            let b = self.pool.copy_of(packet);
+            self.unreliable.push_back(b);
         }
     }
 
@@ -475,13 +621,8 @@ impl Connection {
         self.close(reason, true);
     }
 
-    fn emit(&mut self, mut datagram: Vec<u8>) {
-        if let Some(c) = &mut self.cipher {
-            c.encrypt(&mut datagram);
-        }
-        self.stats.datagrams_sent += 1;
-        self.stats.bytes_sent += datagram.len() as u64;
-        self.transmit.push_back(datagram);
+    fn emit(&mut self, datagram: Vec<u8>) {
+        self.emitter().emit(datagram);
     }
 
     fn emit_raw(&mut self, datagram: Vec<u8>) {
@@ -510,14 +651,16 @@ impl Connection {
                 if data.len() >= 6 && data[0] == 0 && data[1] == 2 {
                     return;
                 }
-                let mut buf = data.to_vec();
+                let mut buf = self.pool.copy_of(data);
                 if let Some(c) = &mut self.cipher
                     && !c.decrypt(&mut buf)
                 {
                     self.stats.dropped += 1;
+                    self.pool.put(buf);
                     return;
                 }
                 self.process(now, &buf, 0, false);
+                self.pool.put(buf);
                 self.drain_cipher_out();
             }
         }
@@ -532,6 +675,9 @@ impl Connection {
     }
 
     fn drain_cipher_out(&mut self) {
+        if self.cipher_out.is_empty() {
+            return;
+        }
         for (p, reliable) in std::mem::take(&mut self.cipher_out) {
             if reliable {
                 self.pending.push_back((p, Tag::Cipher));
@@ -544,7 +690,8 @@ impl Connection {
     fn deliver(&mut self, packet: &[u8]) {
         if !packet.is_empty() {
             self.session_started = true;
-            self.events.push_back(Event::Packet(packet.to_vec()));
+            let b = self.pool.copy_of(packet);
+            self.events.push_back(Event::Packet(b));
         }
     }
 
@@ -579,7 +726,8 @@ impl Connection {
                 if p.len() >= 14 {
                     self.peer_counts = Some((u32_at(6).unwrap_or(0), u32_at(10).unwrap_or(0)));
                 }
-                let mut r = vec![0, 6];
+                let mut r = self.pool.take();
+                r.extend_from_slice(&[0, 6]);
                 r.extend_from_slice(&echo.to_le_bytes());
                 r.extend_from_slice(&ticks(now).to_le_bytes());
                 self.emit(r);
@@ -631,14 +779,22 @@ impl Connection {
         }
         self.session_started = true;
         self.acks.push(seq);
-        if seq < self.expected || self.recv_buf.contains_key(&seq) {
+        let n = self.recv_ring.len();
+        let slot = seq as usize % n;
+        if seq < self.expected || self.recv_ring[slot].is_some() {
             self.stats.duplicates += 1;
             return;
         }
-        self.recv_buf.insert(seq, payload.to_vec());
-        while let Some(p) = self.recv_buf.remove(&self.expected) {
+        let b = self.pool.copy_of(payload);
+        self.recv_ring[slot] = Some(b);
+        loop {
+            let slot = self.expected as usize % n;
+            let Some(p) = self.recv_ring[slot].take() else {
+                break;
+            };
             self.expected = self.expected.wrapping_add(1);
             self.process(now, &p, depth + 1, true);
+            self.pool.put(p);
             if self.is_closed() {
                 return;
             }
@@ -650,6 +806,7 @@ impl Connection {
             return;
         };
         let r = self.in_flight.remove(i).expect("index from position");
+        self.pool.put(r.datagram);
         if r.sends == 1 {
             let sample = now.saturating_sub(r.last_sent);
             let diff = self.rtt_avg.abs_diff(sample);
@@ -778,7 +935,8 @@ impl Connection {
         if let (Some(at), Some(interval)) = (self.next_sync, self.cfg.sync_interval_ms)
             && now >= at
         {
-            let mut p = vec![0, 5];
+            let mut p = self.pool.take();
+            p.extend_from_slice(&[0, 5]);
             p.extend_from_slice(&ticks(now).to_le_bytes());
             p.extend_from_slice(&(self.stats.datagrams_sent as u32 + 1).to_le_bytes());
             p.extend_from_slice(&(self.stats.datagrams_received as u32).to_le_bytes());
@@ -843,10 +1001,11 @@ impl Connection {
             let Some((payload, tag)) = self.pending.pop_front() else {
                 break;
             };
-            let mut d = Vec::with_capacity(payload.len() + 6);
+            let mut d = self.pool.take();
             d.extend_from_slice(&[0, 3]);
             d.extend_from_slice(&self.next_seq.to_le_bytes());
             d.extend_from_slice(&payload);
+            self.pool.put(payload);
             self.in_flight.push_back(InFlight {
                 seq: self.next_seq,
                 datagram: d,
@@ -857,81 +1016,55 @@ impl Connection {
             self.next_seq = self.next_seq.wrapping_add(1);
         }
 
-        let mut items: Vec<Vec<u8>> = Vec::new();
-        for seq in std::mem::take(&mut self.acks) {
-            let mut a = vec![0, 4];
-            a.extend_from_slice(&seq.to_le_bytes());
-            items.push(a);
-        }
+        // Give up on the peer if a due reliable has used all its retries.
         let rto = self.rto();
-        let mut give_up = false;
-        for r in &mut self.in_flight {
-            let due = r.sends == 0 || now.saturating_sub(r.last_sent) >= u64::from(r.sends) * rto;
-            if !due {
-                continue;
-            }
-            if r.sends >= self.cfg.max_retries {
-                give_up = true;
-                break;
-            }
-            if r.sends > 0 {
-                self.stats.retransmits += 1;
-            }
-            r.sends += 1;
-            r.last_sent = now;
-            items.push(r.datagram.clone());
-        }
-        if give_up {
+        let due = |r: &InFlight| {
+            r.sends == 0 || now.saturating_sub(r.last_sent) >= u64::from(r.sends) * rto
+        };
+        if self
+            .in_flight
+            .iter()
+            .any(|r| due(r) && r.sends >= self.cfg.max_retries)
+        {
             self.close(DisconnectReason::ReliableRetries, true);
             return;
         }
-        items.extend(self.unreliable.drain(..));
 
-        let max = self.cfg.max_send;
-        let mut cluster: Vec<u8> = Vec::new();
-        let mut count = 0;
-        let mut single: Option<Vec<u8>> = None;
-        for item in items {
-            if item.len() > 255 {
-                self.emit(item);
+        let mut packer = Packer {
+            cur: self.pool.take(),
+            count: 0,
+            max: self.cfg.max_send,
+        };
+        let mut em = Emitter {
+            cipher: &mut self.cipher,
+            stats: &mut self.stats,
+            transmit: &mut self.transmit,
+            pool: &mut self.pool,
+        };
+        for &seq in &self.acks {
+            let mut a = [0u8; 6];
+            a[1] = 4;
+            a[2..].copy_from_slice(&seq.to_le_bytes());
+            packer.add(&a, &mut em);
+        }
+        self.acks.clear();
+        for r in &mut self.in_flight {
+            if !due(r) {
                 continue;
             }
-            let base = if count == 0 { 2 } else { cluster.len() };
-            if count > 0 && base + 1 + item.len() > max {
-                self.flush_cluster(&mut cluster, &mut count, &mut single);
+            if r.sends > 0 {
+                em.stats.retransmits += 1;
             }
-            if count == 0 {
-                cluster.clear();
-                cluster.extend_from_slice(&[0, 0x0E]);
-            }
-            cluster.push(item.len() as u8);
-            cluster.extend_from_slice(&item);
-            if count == 0 {
-                single = Some(item);
-            }
-            count += 1;
+            r.sends += 1;
+            r.last_sent = now;
+            packer.add(&r.datagram, &mut em);
         }
-        self.flush_cluster(&mut cluster, &mut count, &mut single);
-    }
-
-    fn flush_cluster(
-        &mut self,
-        cluster: &mut Vec<u8>,
-        count: &mut usize,
-        single: &mut Option<Vec<u8>>,
-    ) {
-        match *count {
-            0 => {}
-            1 => {
-                if let Some(s) = single.take() {
-                    self.emit(s);
-                }
-            }
-            _ => self.emit(std::mem::take(cluster)),
+        while let Some(u) = self.unreliable.pop_front() {
+            packer.add(&u, &mut em);
+            em.pool.put(u);
         }
-        *count = 0;
-        *single = None;
-        cluster.clear();
+        packer.finish(&mut em);
+        em.pool.put(packer.cur);
     }
 
     /// When the connection next needs [`Connection::tick`] at the latest (ms), if

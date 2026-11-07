@@ -36,6 +36,28 @@ pub trait Cipher: Send {
 
     /// Short name for logs ("none", "vie", ...).
     fn name(&self) -> &'static str;
+
+    /// Which encryption family this is. Servers use it to tell SubSpace (VIE)
+    /// clients from Continuum clients, e.g. for the login packet length check.
+    /// External implementations should override it; the default is
+    /// [`CipherKind::Other`].
+    fn kind(&self) -> CipherKind {
+        CipherKind::Other
+    }
+}
+
+/// Encryption family of a [`Cipher`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CipherKind {
+    /// No encryption.
+    None,
+    /// SubSpace VIE encryption.
+    Vie,
+    /// Continuum encryption (provided by an external implementation).
+    Continuum,
+    /// Some other implementation.
+    Other,
 }
 
 /// Lets a [`Cipher`] queue packets on its connection.
@@ -121,6 +143,9 @@ impl Cipher for NullCipher {
     fn name(&self) -> &'static str {
         "none"
     }
+    fn kind(&self) -> CipherKind {
+        CipherKind::None
+    }
 }
 
 impl Cipher for VieCipher {
@@ -133,6 +158,9 @@ impl Cipher for VieCipher {
     }
     fn name(&self) -> &'static str {
         "vie"
+    }
+    fn kind(&self) -> CipherKind {
+        CipherKind::Vie
     }
 }
 

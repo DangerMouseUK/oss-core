@@ -11,3 +11,10 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false }
+
+[[bench]]
+name = "transport"
+harness = false

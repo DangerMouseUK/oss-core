@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 
 use crate::cipher::Acceptor;
-use crate::connection::{Config, Connection, DisconnectReason, Event};
+use crate::connection::{Config, Connection, DisconnectReason, Event, Pool};
 
 /// Multiplexes connections for a listening socket.
 pub struct Server<A> {
@@ -20,6 +20,8 @@ pub struct Server<A> {
     pub max_connections: usize,
     raw_out: VecDeque<(A, Vec<u8>)>,
     events: VecDeque<(A, Event)>,
+    pool: Pool,
+    scratch: Vec<A>,
 }
 
 impl<A> core::fmt::Debug for Server<A> {
@@ -41,6 +43,8 @@ impl<A: Eq + Hash + Clone> Server<A> {
             max_connections: 1024,
             raw_out: VecDeque::new(),
             events: VecDeque::new(),
+            pool: Pool::default(),
+            scratch: Vec::new(),
         }
     }
 
@@ -60,6 +64,7 @@ impl<A: Eq + Hash + Clone> Server<A> {
         match accepted {
             Some(acc) => {
                 let mut conn = Connection::server(self.cfg.clone(), acc, now);
+                conn.set_connect_protocol(crate::cipher::parse_connect(data).map(|(_, p)| p));
                 // The request itself counts as received traffic.
                 conn.note_received(now, data.len());
                 self.conns.insert(from.clone(), conn);
@@ -110,7 +115,10 @@ impl<A: Eq + Hash + Clone> Server<A> {
                             }
                         }
                         Some(pending) => {
-                            let conn = Connection::server(self.cfg.clone(), pending, now);
+                            let mut conn = Connection::server(self.cfg.clone(), pending, now);
+                            conn.set_connect_protocol(
+                                crate::cipher::parse_connect(data).map(|(_, p)| p),
+                            );
                             self.conns.insert(from.clone(), conn);
                         }
                         None => {}
@@ -129,6 +137,8 @@ impl<A: Eq + Hash + Clone> Server<A> {
         let Some(conn) = self.conns.get_mut(addr) else {
             return;
         };
+        // Hand recycled buffers back to the connection.
+        conn.pool_mut().refill_from(&mut self.pool, 32);
         while let Some(d) = conn.poll_transmit() {
             self.raw_out.push_back((addr.clone(), d));
         }
@@ -140,16 +150,26 @@ impl<A: Eq + Hash + Clone> Server<A> {
     /// Runs every connection's timers and packs output; closed connections are
     /// removed after their final datagrams are queued.
     pub fn tick(&mut self, now: u64) {
-        let addrs: Vec<A> = self.conns.keys().cloned().collect();
-        for a in addrs {
-            if let Some(c) = self.conns.get_mut(&a) {
+        let mut addrs = std::mem::take(&mut self.scratch);
+        addrs.clear();
+        addrs.extend(self.conns.keys().cloned());
+        for a in &addrs {
+            if let Some(c) = self.conns.get_mut(a) {
                 c.tick(now);
             }
-            self.collect(&a);
-            if self.conns.get(&a).is_some_and(Connection::is_closed) {
-                self.conns.remove(&a);
+            self.collect(a);
+            if self.conns.get(a).is_some_and(Connection::is_closed) {
+                self.conns.remove(a);
             }
         }
+        self.scratch = addrs;
+    }
+
+    /// Returns a buffer from [`Server::poll_transmit`] or an [`Event::Packet`] for
+    /// reuse. Recycling every buffer keeps the server free of per-packet
+    /// allocations once warmed up.
+    pub fn recycle(&mut self, buf: Vec<u8>) {
+        self.pool.put(buf);
     }
 
     /// Queues a packet to one connection (see [`Connection::send`]).
