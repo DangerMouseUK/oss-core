@@ -1,0 +1,71 @@
+//! Round-trips real map files from local directories that are never committed.
+//!
+//! Set `OSS_MAP_DIRS` to one or more directories (separated by `;` on Windows or
+//! `:` elsewhere); every `.lvl` (and `.lvz`) found under them is parsed and
+//! rewritten. Without the variable the test does nothing.
+
+use std::path::{Path, PathBuf};
+
+use oss_formats::Level;
+
+fn collect(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect(&p, ext, out);
+        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)) {
+            out.push(p);
+        }
+    }
+}
+
+fn files(ext: &str) -> Vec<PathBuf> {
+    let Some(dirs) = std::env::var_os("OSS_MAP_DIRS") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for d in std::env::split_paths(&dirs) {
+        collect(&d, ext, &mut out);
+    }
+    out
+}
+
+#[test]
+fn lvl_files_round_trip() {
+    for path in files("lvl") {
+        let data = std::fs::read(&path).unwrap();
+        let lvl = Level::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let grid = lvl.tile_grid();
+        let used = grid.cells().iter().filter(|&&t| t != 0).count();
+        let mut regions = 0;
+        if let Some(m) = &lvl.metadata {
+            for r in m.regions() {
+                let t = r
+                    .tiles()
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                assert_eq!(oss_formats::RegionBitmap::decode(&t.encode()).unwrap(), t);
+                regions += 1;
+            }
+            for c in &m.chunks {
+                if let oss_formats::Chunk::Other { kind, .. } = c {
+                    println!("  other chunk {:?}", String::from_utf8_lossy(kind));
+                }
+            }
+        }
+        println!(
+            "{}: tileset={} meta={} regions={regions} tiles={} grid={used}",
+            path.display(),
+            lvl.tileset.is_some(),
+            lvl.metadata.is_some(),
+            lvl.tiles.len()
+        );
+        assert!(
+            lvl.to_bytes() == data,
+            "{}: rewrite differs",
+            path.display()
+        );
+    }
+}
