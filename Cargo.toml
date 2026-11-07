@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/DangerMouseUK/oss-core"
+homepage = "https://github.com/DangerMouseUK/oss-core"
+
+[workspace.dependencies]
+oss-proto = { path = "crates/oss-proto", version = "0.1.0" }
+oss-net = { path = "crates/oss-net", version = "0.1.0" }
+oss-formats = { path = "crates/oss-formats", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
