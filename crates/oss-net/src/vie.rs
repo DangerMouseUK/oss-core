@@ -61,7 +61,7 @@ impl VieCipher {
             *h = k as u16;
         }
         let mut table = [0u32; TABLE_WORDS];
-        for (t, pair) in table.iter_mut().zip(halves.chunks_exact(2)) {
+        for (t, pair) in table.iter_mut().zip(halves.as_chunks::<2>().0) {
             *t = u32::from(pair[0]) | u32::from(pair[1]) << 16;
         }
         Some(Self { key, table })
