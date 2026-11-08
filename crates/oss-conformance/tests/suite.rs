@@ -358,6 +358,7 @@ fn directory_checks_judge_registrations() {
         let opts = DirectoryOptions {
             wait: Duration::from_secs(5),
             repeat: false,
+            game_port: Some(port),
         };
         let r = live::check_zone_registration(dir, &opts).unwrap();
         stop.store(true, Ordering::Relaxed);
@@ -367,7 +368,7 @@ fn directory_checks_judge_registrations() {
     // The reference's default registration passes every check.
     let r = run(packets[0].clone());
     assert_all_pass(&r, "reference registration");
-    assert_eq!(r.count(Status::Pass), 8, "{}", r.render(true, 20));
+    assert_eq!(r.count(Status::Pass), 9, "{}", r.render(true, 20));
     // A long password: the reference sends it, directories reject it.
     let long = packets
         .iter()
@@ -389,4 +390,75 @@ fn directory_checks_judge_registrations() {
             .iter()
             .any(|o| o.id == "ip-zero" && o.status == Status::Fail)
     );
+}
+
+/// A scripted zone connects to the biller mode and sends the reference
+/// server's own connect and capabilities packets (from `billing-ssc.txt`).
+#[test]
+fn billing_checks_judge_a_zone_connection() {
+    let text = vectors::FILES
+        .iter()
+        .find(|(n, _)| *n == "billing-ssc.txt")
+        .unwrap()
+        .1;
+    let packet = |name: &str| {
+        text.lines()
+            .find_map(|l| {
+                let f: Vec<&str> = l.split_whitespace().collect();
+                (f.len() == 4 && f[0] == "s2b" && f[1] == name)
+                    .then(|| vectors::unhex(f[3]).unwrap())
+            })
+            .unwrap()
+    };
+    let (connect, caps) = (packet("connect"), packet("capabilities"));
+
+    let biller = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = biller.local_addr().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let zone = {
+        let stop = stop.clone();
+        thread::spawn(move || {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            sock.connect(addr).unwrap();
+            sock.set_read_timeout(Some(Duration::from_millis(5)))
+                .unwrap();
+            let start = Instant::now();
+            let mut conn = oss_net::Connection::client(
+                Config::client(),
+                Box::new(oss_net::VieClientHandshake::new(77)),
+                0,
+            );
+            let mut sent = 0;
+            let mut buf = [0u8; 2048];
+            while !stop.load(Ordering::Relaxed) {
+                let now = start.elapsed().as_millis() as u64;
+                if let Ok(n) = sock.recv(&mut buf) {
+                    conn.handle_datagram(now, &buf[..n]);
+                }
+                if conn.is_connected() && sent == 0 {
+                    conn.send(&connect, true);
+                    sent = 1;
+                }
+                if sent == 1 && now > 500 {
+                    conn.send(&caps, true);
+                    sent = 2;
+                }
+                conn.tick(now);
+                while let Some(d) = conn.poll_transmit() {
+                    let _ = sock.send(&d);
+                }
+                while conn.poll_event().is_some() {}
+            }
+        })
+    };
+    let opts = live::BillerOptions {
+        wait: Duration::from_secs(10),
+        timeout: Duration::from_secs(10),
+        zone: None,
+    };
+    let r = live::check_zone_billing(biller, &opts).unwrap();
+    stop.store(true, Ordering::Relaxed);
+    zone.join().unwrap();
+    assert_all_pass(&r, "billing checks");
+    assert_eq!(r.count(Status::Pass), 4, "{}", r.render(true, 20));
 }

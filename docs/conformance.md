@@ -9,6 +9,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 | Vectors | `oss-conformance vectors -- <your adapter>` | 3,749 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
 | Live directory | `oss-conformance directory --bind ADDR` | a zone's directory registration, with the suite acting as a directory server |
+| Live billing | `oss-conformance biller --bind ADDR [--zone HOST:PORT]` | a zone's SSC billing client, with the suite acting as the billing server |
 | Live client | `oss-conformance client --bind ADDR` | a client that connects to the suite, which acts as a zone |
 
 The exit status is 0 if nothing failed, 1 if a check failed, and 2 on usage or I/O errors. `--verbose` lists every check; otherwise only failures are listed after the per-group counts.
@@ -20,7 +21,8 @@ oss-conformance vectors                            # oss-core itself (should be 
 oss-conformance vectors -- python3 my_adapter.py   # your implementation
 oss-conformance server zone.example:5000 --name Tester --password secret
 oss-conformance client --bind 0.0.0.0:5000         # then point your client at this address
-oss-conformance directory --bind 0.0.0.0:4991      # then list this address as the zone's directory server
+oss-conformance directory --bind 0.0.0.0:4991 --zone 127.0.0.1:5000   # list this address as the zone's directory server
+oss-conformance biller --bind 0.0.0.0:1850 --zone 127.0.0.1:5000      # point the zone's [Billing] IP/Port here
 ```
 
 ## Vectors and the adapter protocol
@@ -129,10 +131,25 @@ The suite listens as a directory server (UDP, normally port 4991) and checks the
 | `version-134` | the version is 134 |
 | `score-keeping` | 0 or 1 |
 | `name` | printable, non-empty and NUL-terminated within its 32 bytes |
+| `registered-port` | with `--zone`, the registered game port is the zone's real one. Without it a wrong port could pass `ping-reachable` if something else answers there |
 | `password-length` | at most 15 characters. Directory servers ignore the rest, and some reject longer passwords, although the reference server will send one |
 | `description` | ends with a NUL, and the datagram is at most 480 bytes |
 | `ping-reachable` | the zone answers a ping on the registered game port + 1 |
 | `repeat-interval` | with `--repeat`, the next registration arrives about 60 s later |
+
+## Live billing checks
+
+The suite listens as an SSC billing server, and the zone under test connects to it as a client: the standard transport without encryption, with every packet reliable (see [billing.md](protocol/billing.md)). With `--zone`, the suite also logs a player into the zone over a normal client connection, and plays the biller's part of that login.
+
+| Check | Requirement |
+|---|---|
+| `connect` | the zone completes the transport handshake with the biller |
+| `server-connect`, `server-connect-fields` | its first packet is S2B `0x02`, with a server name and a non-zero port. The biller never acknowledges it |
+| `capabilities` | S2B `0x15`. Optional: the reference zone sends it about 5 s after connecting |
+| `user-login` | with `--zone`: a player logging into the zone produces S2B `0x04` for that name |
+| `user-login-client-data` | a SubSpace (VIE) client's login carries no client data (86 bytes) |
+| `user-login-relayed` | once the biller accepts (B2S `0x01`, result 0), the player gets a successful login response |
+| `user-logoff` | when the player disconnects, S2B `0x05` arrives with the same connection id |
 
 ## Live client checks
 
@@ -162,4 +179,5 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 15 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
 | `oss-server` (bundled default zone, 2026-11-08) | — | 28 pass, 1 skipped: it sent no security request within 2 s. Directory registration not yet implemented |
+| `oss-server` with `billing_ssc` and its in-progress `directory` module (2026-11-08) | — | billing: all 8 pass; directory (with `--zone`): 9 pass, 1 skipped (`repeat-interval` not requested) |
 | Registrations built by the reference server (`directory.txt`) | — | The default registration passes all 8 checks. One with a 30-character password fails `password-length`, as directory servers would refuse it |

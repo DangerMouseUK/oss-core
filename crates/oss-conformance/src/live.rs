@@ -1160,6 +1160,8 @@ pub struct DirectoryOptions {
     pub wait: Duration,
     /// Also wait for the next registration and check the interval (about 60 s).
     pub repeat: bool,
+    /// The zone's actual game port, if known: the registered port must match it.
+    pub game_port: Option<u16>,
 }
 
 impl Default for DirectoryOptions {
@@ -1167,6 +1169,7 @@ impl Default for DirectoryOptions {
         Self {
             wait: Duration::from_secs(120),
             repeat: false,
+            game_port: None,
         }
     }
 }
@@ -1260,6 +1263,26 @@ pub fn check_zone_registration(sock: UdpSocket, opts: &DirectoryOptions) -> io::
         ),
     );
 
+    match opts.game_port {
+        Some(p) => r.check(
+            G,
+            "registered-port",
+            u.port == p,
+            format!(
+                "registered game port {} but the zone listens on {p}",
+                u.port
+            ),
+        ),
+        None => r.skip(
+            G,
+            "registered-port",
+            format!(
+                "registered game port {}; pass --zone to check it is the real one",
+                u.port
+            ),
+        ),
+    }
+
     // Directories ping zones on the registered game port + 1.
     let mut target = src;
     target.set_port(u.port.wrapping_add(1));
@@ -1275,12 +1298,17 @@ pub fn check_zone_registration(sock: UdpSocket, opts: &DirectoryOptions) -> io::
             answered |= from == target && n == 8 && buf[4..8] == token;
         }
     }
-    r.check(
-        G,
-        "ping-reachable",
-        answered,
-        format!("no ping answer on {target} (the registered game port + 1)"),
-    );
+    if answered {
+        // Name the address: if the registered port is wrong, another program
+        // may be the one answering.
+        r.pass(G, format!("ping-reachable ({target})"));
+    } else {
+        r.fail(
+            G,
+            "ping-reachable",
+            format!("no ping answer on {target} (the registered game port + 1)"),
+        );
+    }
 
     if opts.repeat {
         let start = Instant::now();
@@ -1302,6 +1330,301 @@ pub fn check_zone_registration(sock: UdpSocket, opts: &DirectoryOptions) -> io::
             "repeat-interval",
             "not requested (--repeat waits for the next registration, about a minute)",
         );
+    }
+    Ok(r)
+}
+
+// ---- zone under test: SSC billing ----------------------------------------------------
+
+/// Options for [`check_zone_billing`].
+#[derive(Debug, Clone)]
+pub struct BillerOptions {
+    /// How long to wait for the zone to connect.
+    pub wait: Duration,
+    /// How long to wait for each later step.
+    pub timeout: Duration,
+    /// The zone's game address. When set, the suite also logs a player in and
+    /// out through the zone and checks that the zone relays both to the biller.
+    pub zone: Option<SocketAddr>,
+}
+
+impl Default for BillerOptions {
+    fn default() -> Self {
+        Self {
+            wait: Duration::from_secs(120),
+            timeout: Duration::from_secs(10),
+            zone: None,
+        }
+    }
+}
+
+/// The suite's biller side: one zone connection.
+struct Biller {
+    sock: UdpSocket,
+    server: Server<SocketAddr>,
+    start: Instant,
+    zone: Option<SocketAddr>,
+    packets: Vec<oss_proto::billing::ServerToBiller>,
+    gone: bool,
+}
+
+impl Biller {
+    fn pump(&mut self) {
+        let mut buf = [0u8; 2048];
+        while let Ok((n, from)) = self.sock.recv_from(&mut buf) {
+            self.zone.get_or_insert(from);
+            if Some(from) == self.zone {
+                self.server.handle_datagram(ms(self.start), from, &buf[..n]);
+            }
+        }
+        self.server.tick(ms(self.start));
+        while let Some((to, d)) = self.server.poll_transmit() {
+            let _ = self.sock.send_to(&d, to);
+            self.server.recycle(d);
+        }
+        while let Some((_, e)) = self.server.poll_event() {
+            match e {
+                Event::Packet(p) => {
+                    if let Ok(pk) = oss_proto::billing::ServerToBiller::decode(&p) {
+                        self.packets.push(pk);
+                    }
+                    self.server.recycle(p);
+                }
+                Event::Disconnected(_) => self.gone = true,
+                _ => {}
+            }
+        }
+    }
+
+    fn send(&mut self, p: oss_proto::billing::BillerToServer) {
+        if let Some(z) = self.zone {
+            self.server.send(&z, &p.to_bytes(), true);
+        }
+    }
+
+    fn find<T>(&self, f: impl Fn(&oss_proto::billing::ServerToBiller) -> Option<T>) -> Option<T> {
+        self.packets.iter().find_map(f)
+    }
+}
+
+/// Acts as an SSC billing server on `sock` and checks the zone that connects:
+/// the connect packet, then (with [`BillerOptions::zone`]) a player's login and
+/// logoff relayed through the zone.
+pub fn check_zone_billing(sock: UdpSocket, opts: &BillerOptions) -> io::Result<Report> {
+    use oss_proto::billing::{
+        BillerLogin, BillerToServer, PlayerScore, ServerToBiller, login_result,
+    };
+    const G: &str = "billing";
+    let mut r = Report::default();
+    sock.set_read_timeout(Some(Duration::from_millis(5)))?;
+    let mut server = Server::new(Config::server());
+    // Zones connect to billers without encryption.
+    server.add_acceptor(Box::new(oss_net::NullAcceptor));
+    let mut b = Biller {
+        sock,
+        server,
+        start: Instant::now(),
+        zone: None,
+        packets: Vec::new(),
+        gone: false,
+    };
+    let wait_until = |b: &mut Biller, until: Instant, done: &dyn Fn(&Biller) -> bool| {
+        while Instant::now() < until && !done(b) && !b.gone {
+            b.pump();
+        }
+        done(b)
+    };
+
+    let connected = wait_until(&mut b, Instant::now() + opts.wait, &|b| {
+        b.zone
+            .is_some_and(|z| b.server.connection(&z).is_some_and(|c| c.is_connected()))
+    });
+    if !connected {
+        r.fail(G, "connect", "no zone connected to the biller");
+        return Ok(r);
+    }
+    r.pass(G, "connect");
+
+    // ServerConnect first; the biller never acknowledges it.
+    wait_until(&mut b, Instant::now() + opts.timeout, &|b| {
+        !b.packets.is_empty()
+    });
+    match b.packets.first() {
+        Some(ServerToBiller::ServerConnect { name, port, .. }) => {
+            r.pass(G, "server-connect");
+            r.check(
+                G,
+                "server-connect-fields",
+                !name.as_bytes().is_empty() && *port != 0,
+                "the server name must be set and the port non-zero",
+            );
+        }
+        Some(other) => r.fail(
+            G,
+            "server-connect",
+            format!("the first packet was {other:?}, not S2B 0x02 server connect"),
+        ),
+        None => {
+            r.fail(
+                G,
+                "server-connect",
+                "the zone sent nothing after connecting",
+            );
+            return Ok(r);
+        }
+    }
+
+    // The reference zone assumes it is logged in after 5 s without an answer
+    // and then announces its capabilities; that announcement is optional.
+    let caps = wait_until(&mut b, Instant::now() + Duration::from_secs(8), &|b| {
+        b.find(|p| matches!(p, ServerToBiller::ServerCapabilities { .. }).then_some(()))
+            .is_some()
+    });
+    if caps {
+        r.pass(G, "capabilities");
+    } else {
+        r.skip(
+            G,
+            "capabilities",
+            "no S2B 0x15 (optional: multicast channel chat)",
+        );
+    }
+
+    let Some(zone_addr) = opts.zone else {
+        r.skip(
+            G,
+            "user-login",
+            "no --zone given, so no player was logged in",
+        );
+        return Ok(r);
+    };
+
+    // A player logs in to the zone; the zone must ask the biller.
+    let csock = UdpSocket::bind(if zone_addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    })?;
+    csock.connect(zone_addr)?;
+    csock.set_read_timeout(Some(Duration::from_millis(5)))?;
+    let mut c = Session {
+        sock: csock,
+        conn: Connection::client(
+            Config::client(),
+            Box::new(VieClientHandshake::new(seed())),
+            0,
+        ),
+        start: Instant::now(),
+        packets: Vec::new(),
+        closed: false,
+    };
+    let name = format!("biller-{:04x}", seed() & 0xFFFF);
+    let deadline = Instant::now() + opts.timeout;
+    while !c.conn.is_connected() && Instant::now() < deadline && !c.closed {
+        c.pump(Duration::from_millis(20), |_| false);
+        b.pump();
+    }
+    if !c.conn.is_connected() {
+        r.fail(
+            G,
+            "user-login",
+            format!("could not connect to the zone at {zone_addr}"),
+        );
+        return Ok(r);
+    }
+    c.send(Login {
+        name: FixedStr::new(name.as_bytes()),
+        password: FixedStr::new(b"conformance"),
+        machine_id: seed(),
+        ..Login::default()
+    });
+    let deadline = Instant::now() + opts.timeout;
+    let mut login = None;
+    while login.is_none() && Instant::now() < deadline {
+        c.pump(Duration::from_millis(20), |_| false);
+        b.pump();
+        login = b.find(|p| match p {
+            ServerToBiller::UserLogin(l)
+                if l.name.as_bytes().eq_ignore_ascii_case(name.as_bytes()) =>
+            {
+                Some(l.clone())
+            }
+            _ => None,
+        });
+    }
+    let Some(login) = login else {
+        r.fail(
+            G,
+            "user-login",
+            "the zone did not send S2B 0x04 for a player logging in",
+        );
+        return Ok(r);
+    };
+    r.pass(G, "user-login");
+    r.check(
+        G,
+        "user-login-client-data",
+        login.extra.is_empty(),
+        format!(
+            "a SubSpace (VIE) client's login carries no client data (86 bytes); got {} extra bytes",
+            login.extra.len()
+        ),
+    );
+
+    // The biller accepts; the zone must tell the player.
+    b.send(BillerToServer::UserLogin(BillerLogin {
+        result: login_result::OK,
+        connection_id: login.connection_id,
+        name: FixedStr::new(name.as_bytes()),
+        squad: FixedStr::default(),
+        user_id: 1,
+        score: Some(PlayerScore::default()),
+        ..BillerLogin::default()
+    }));
+    let deadline = Instant::now() + opts.timeout;
+    let mut code = None;
+    while code.is_none() && Instant::now() < deadline {
+        c.pump(Duration::from_millis(20), |_| false);
+        b.pump();
+        code = c.packets.iter().find_map(|(_, p)| match p {
+            S2CPacket::LoginResponse(l) => Some(l.code),
+            _ => None,
+        });
+    }
+    r.check(
+        G,
+        "user-login-relayed",
+        matches!(code, Some(login_code::OK | login_code::NO_SCORES)),
+        format!("after the biller accepted the login, the player got login code {code:?}"),
+    );
+
+    // The player leaves; the zone reports it with the same connection id.
+    c.conn.disconnect();
+    let deadline = Instant::now() + opts.timeout;
+    let mut logoff = None;
+    while logoff.is_none() && Instant::now() < deadline {
+        c.pump(Duration::from_millis(20), |_| false);
+        b.pump();
+        logoff = b.find(|p| match p {
+            ServerToBiller::UserLogoff { connection_id, .. } => Some(*connection_id),
+            _ => None,
+        });
+    }
+    match logoff {
+        Some(id) => r.check(
+            G,
+            "user-logoff",
+            id == login.connection_id,
+            format!(
+                "logoff for connection {id}, login was {}",
+                login.connection_id
+            ),
+        ),
+        None => r.fail(
+            G,
+            "user-logoff",
+            "no S2B 0x05 after the player disconnected",
+        ),
     }
     Ok(r)
 }

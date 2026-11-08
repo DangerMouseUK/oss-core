@@ -4,6 +4,13 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-conformance (billing mode)
+- New mode `oss-conformance biller --bind ADDR [--zone HOST:PORT]`: the suite acts as an SSC billing server and checks the zone's billing client.
+  - Checks: the connect packet and the optional capabilities announcement.
+  - With `--zone`, it also checks a player's login relayed to the biller and back, and the logoff with the same connection id (8 checks).
+  - Tested against the reference server's own packets; oss-server's `billing_ssc` passes all 8 end to end.
+- Directory mode gains `--zone HOST:PORT` and a `registered-port` check. Without it, a zone registering the wrong port could pass `ping-reachable` whenever another program answered on that port. The `ping-reachable` result now names the address it pinged.
+
 ### oss-proto (settings layout)
 - New `settings::layout() -> Vec<SettingLocation>` (`name`, `bit_offset`, `bit_len`): every named setting and its place in the settings packet. It is checked against the reference server's layout, and the conformance suite now uses it. A game simulation can use it to list the settings it does and doesn't read, mechanically (prompted by PRIVATE review L3).
 

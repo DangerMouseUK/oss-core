@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use oss_conformance::adapter::{self, Process, Reference};
-use oss_conformance::live::{self, ClientOptions, DirectoryOptions, ServerOptions};
+use oss_conformance::live::{self, BillerOptions, ClientOptions, DirectoryOptions, ServerOptions};
 use oss_conformance::{Report, vectors};
 
 const HELP: &str = "\
@@ -23,9 +23,14 @@ usage:
   oss-conformance client [--bind ADDR] [--wait S] [--timeout S]
       Act as a zone on ADDR (default 127.0.0.1:5000) and check the first
       client that connects.
-  oss-conformance directory [--bind ADDR] [--wait S] [--repeat]
+  oss-conformance directory [--bind ADDR] [--zone HOST:PORT] [--wait S] [--repeat]
       Act as a directory server on ADDR (default 0.0.0.0:4991) and check the
-      first zone registration that arrives; --repeat also checks the interval.
+      first zone registration that arrives; --zone checks the registered port
+      against the zone's real one, --repeat also checks the interval.
+  oss-conformance biller [--bind ADDR] [--zone HOST:PORT] [--wait S] [--timeout S]
+      Act as an SSC billing server on ADDR (default 0.0.0.0:1850) and check the
+      zone that connects; with --zone, also log a player in and out through the
+      zone and check the relayed login and logoff.
   oss-conformance list
       List the offline check groups and counts.
 
@@ -132,6 +137,16 @@ fn run(args: &[String]) -> Result<Report, String> {
             let opts = DirectoryOptions {
                 wait: secs(args, "--wait", 120)?,
                 repeat: args.iter().any(|a| a == "--repeat"),
+                game_port: match opt(args, "--zone") {
+                    Some(z) => Some(
+                        z.to_socket_addrs()
+                            .map_err(|e| format!("{z}: {e}"))?
+                            .next()
+                            .ok_or(format!("{z}: no address"))?
+                            .port(),
+                    ),
+                    None => None,
+                },
             };
             eprintln!(
                 "waiting for a zone registration on {} (up to {} s)...",
@@ -139,6 +154,30 @@ fn run(args: &[String]) -> Result<Report, String> {
                 opts.wait.as_secs()
             );
             live::check_zone_registration(sock, &opts).map_err(|e| e.to_string())
+        }
+        Some("biller") => {
+            let bind = opt(args, "--bind").unwrap_or("0.0.0.0:1850");
+            let sock = UdpSocket::bind(bind).map_err(|e| format!("{bind}: {e}"))?;
+            let zone = match opt(args, "--zone") {
+                Some(z) => Some(
+                    z.to_socket_addrs()
+                        .map_err(|e| format!("{z}: {e}"))?
+                        .next()
+                        .ok_or(format!("{z}: no address"))?,
+                ),
+                None => None,
+            };
+            let opts = BillerOptions {
+                wait: secs(args, "--wait", 120)?,
+                timeout: secs(args, "--timeout", 10)?,
+                zone,
+            };
+            eprintln!(
+                "waiting for a zone to connect to the biller on {} (up to {} s)...",
+                sock.local_addr().map_err(|e| e.to_string())?,
+                opts.wait.as_secs()
+            );
+            live::check_zone_billing(sock, &opts).map_err(|e| e.to_string())
         }
         Some("list") => {
             let mut groups: Vec<(&str, usize)> = Vec::new();
