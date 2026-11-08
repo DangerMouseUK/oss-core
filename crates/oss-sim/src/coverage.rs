@@ -575,6 +575,22 @@ mod tests {
             eprintln!("oss-core vectors not found; checked against oss-proto's tables only");
         }
         let settings = include_str!("settings.rs");
+        // Client code lives in oss-client: `OSS_CLIENT_DIR` names a checkout
+        // (and makes checking it mandatory); otherwise a sibling checkout is
+        // used if there is one.
+        let required = std::env::var_os("OSS_CLIENT_DIR").map(std::path::PathBuf::from);
+        let client_root = required
+            .clone()
+            .or_else(|| repo().parent().map(|p| p.join("oss-client")))
+            .filter(|p| p.is_dir());
+        if let Some(dir) = &required {
+            assert!(
+                client_root.is_some(),
+                "OSS_CLIENT_DIR={} is not a directory",
+                dir.display()
+            );
+        }
+        let (mut checked, mut skipped) = (0, 0);
         for (name, u) in COVERAGE {
             match u {
                 Use::Read(acc) => assert!(
@@ -583,21 +599,27 @@ mod tests {
                     "{name}: settings.rs doesn't call {acc}"
                 ),
                 Use::Client(file, text) => {
-                    // Client code lives in oss-client; check it when that
-                    // checkout sits next to this one, skip it otherwise.
-                    let Some(path) = repo()
-                        .parent()
-                        .map(|p| p.join("oss-client").join(file))
-                        .filter(|p| p.exists())
-                    else {
+                    let Some(root) = &client_root else {
+                        skipped += 1;
                         continue;
                     };
-                    let src = std::fs::read_to_string(&path)
+                    // With a checkout present, a missing file is a failure
+                    // (the code moved), not a skip.
+                    let src = std::fs::read_to_string(root.join(file))
                         .unwrap_or_else(|e| panic!("{name}: {file}: {e}"));
                     assert!(src.contains(text), "{name}: {file} doesn't use {text}");
+                    checked += 1;
                 }
                 _ => {}
             }
+        }
+        if skipped > 0 {
+            // Visible with `--nocapture`, and in CI logs on failure.
+            eprintln!(
+                "settings coverage: {skipped} Use::Client entries NOT checked (no oss-client                  checkout; set OSS_CLIENT_DIR to check them), {checked} checked"
+            );
+        } else {
+            eprintln!("settings coverage: all {checked} Use::Client entries checked");
         }
     }
 
