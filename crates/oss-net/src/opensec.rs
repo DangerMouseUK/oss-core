@@ -9,7 +9,7 @@
 //! * Records: `0xF5`, a 32-bit counter, ciphertext, 16-byte tag (21 bytes of
 //!   overhead), with a 64-packet replay window.
 //!
-//! The client hello is a `00 01` packet longer than 8 bytes, which servers that
+//! The client hello is a 90-byte `00 01` packet, which servers that
 //! only know SubSpace/Continuum ignore; clients can therefore try OpenSec first
 //! and fall back to VIE ([`crate::cipher::Fallback`]).
 //!
@@ -36,8 +36,10 @@ pub const CAP_SERVER_AUTH: u16 = 0x0001;
 pub const RECORD_MARKER: u8 = 0xF5;
 /// Bytes added to each datagram: marker, counter, tag.
 pub const OVERHEAD: usize = 1 + 4 + 16;
-/// Client hello length.
-pub const CLIENT_HELLO_LEN: usize = 42;
+/// Client hello length: 42 bytes of content padded with zeros to the length
+/// of the largest server hello, so answering a (possibly spoofed) hello never
+/// sends more bytes than it received.
+pub const CLIENT_HELLO_LEN: usize = 90;
 /// Server hello length without a static key.
 pub const SERVER_HELLO_LEN: usize = 58;
 /// Server hello length with a static key.
@@ -254,6 +256,7 @@ pub fn client_hello(ephemeral_public: &[u8; 32], caps: u16) -> Vec<u8> {
     v.push(0);
     v.extend_from_slice(&caps.to_le_bytes());
     v.extend_from_slice(ephemeral_public);
+    v.resize(CLIENT_HELLO_LEN, 0);
     v
 }
 
@@ -574,6 +577,12 @@ pub fn client_finish(
         return Err("unsupported OpenSec version");
     }
     let caps = u16::from_le_bytes([server_hello[8], server_hello[9]]);
+    let offered = client_hello
+        .get(8..10)
+        .map_or(0, |c| u16::from_le_bytes([c[0], c[1]]));
+    if caps & !offered != 0 {
+        return Err("server selected a capability the client did not offer");
+    }
     let auth = caps & CAP_SERVER_AUTH != 0;
     let want = if auth {
         SERVER_HELLO_AUTH_LEN
@@ -597,14 +606,23 @@ pub fn client_finish(
         if pinned.is_some_and(|p| *p != s) {
             return Err("server key does not match the pinned key");
         }
-        es.extend_from_slice(ephemeral.diffie_hellman(&PublicKey::from(s)).as_bytes());
+        let shared = ephemeral.diffie_hellman(&PublicKey::from(s));
+        if !shared.was_contributory() {
+            return Err("invalid server static key");
+        }
+        es.extend_from_slice(shared.as_bytes());
         server_key = Some(s);
     } else if pinned.is_some() {
         return Err("server did not authenticate but a key is pinned");
     }
     let body = &server_hello[..want - 16];
     let keys = derive(client_hello, body, ee.as_bytes(), &es);
-    if confirm_tag(&keys)[..] != server_hello[want - 16..] {
+    // Constant-time comparison: every byte is examined whatever the result.
+    let diff = confirm_tag(&keys)
+        .iter()
+        .zip(&server_hello[want - 16..])
+        .fold(0u8, |d, (a, b)| core::hint::black_box(d | (a ^ b)));
+    if diff != 0 {
         return Err("server key confirmation failed");
     }
     Ok((keys, server_key))
@@ -915,41 +933,67 @@ mod tests {
         let secret =
             |start: u8| -> [u8; 32] { core::array::from_fn(|i| start.wrapping_add(i as u8 * 3)) };
         let mut t = String::new();
-        t.push_str("# OpenSec v1 test vectors (docs/protocol/opensec.md). Hex; datagrams as sent on the wire.\n");
         t.push_str(
-            "# case <name>, then the inputs, the handshake packets, derived values and records:\n",
+            "# OpenSec v1 test vectors (docs/protocol/opensec.md). Hex unless noted; datagrams as sent on the wire.\n\
+             #\n\
+             # case <name> starts a handshake; the lines after it are its inputs, packets and derived values:\n\
+             #   *_secret: X25519 private keys as 32 raw bytes (the X25519 function clamps them)\n\
+             #   ee, es: the X25519 outputs (es only with SERVER_AUTH); okm: the 64 HKDF output bytes\n\
+             #   confirm_tag: the last 16 bytes of the server hello\n\
+             # nonce <c2s|s2c> <counter, decimal> <12-byte AEAD nonce>\n\
+             # record <c2s|s2c> <counter, decimal> <plaintext> <encrypted datagram>\n\
+             #\n\
+             # reject-client-hello <name> <client hello>: a server must not answer it\n\
+             # reject-server-hello <name> <client ephemeral secret> <client hello> <pinned key or -> <server hello>:\n\
+             #   a client must fail the handshake\n\
+             # window <name> <step>...: one receiver from a fresh session, fed records in order. Each step is\n\
+             #   <low 32 bits on the wire, decimal>[!]=<full counter the receiver must accept, decimal, or x to drop>;\n\
+             #   ! marks a record whose tag fails, which must change nothing.\n",
         );
-        t.push_str("# record <c2s|s2c> <counter> <plaintext> <encrypted datagram>\n");
+        let pubkey = |s: &StaticSecret| PublicKey::from(s).to_bytes();
         for (name, auth) in [("anonymous", false), ("server-auth", true)] {
             let ce = StaticSecret::from(secret(0x10));
             let se = StaticSecret::from(secret(0x40));
             let ss = auth.then(|| ServerKey::from_secret(secret(0x70)));
-            let hello = client_hello(PublicKey::from(&ce).as_bytes(), CAP_SERVER_AUTH);
+            let hello = client_hello(&pubkey(&ce), CAP_SERVER_AUTH);
             let (sh, keys) = server_respond(&hello, &se, ss.as_ref(), CAP_SERVER_AUTH).unwrap();
             let (ck, _) =
                 client_finish(&hello, &ce, &sh, ss.as_ref().map(|k| k.public()).as_ref()).unwrap();
             assert_eq!(ck, keys);
+            // Intermediate values, recomputed here from the primitives.
+            let ee = ce.diffie_hellman(&PublicKey::from(pubkey(&se)));
+            let es = ss
+                .as_ref()
+                .map(|k| ce.diffie_hellman(&PublicKey::from(k.public())).to_bytes());
+            let mut ikm = ee.to_bytes().to_vec();
+            ikm.extend_from_slice(es.as_ref().map_or(&[][..], |e| &e[..]));
+            let mut okm = [0u8; 64];
+            Hkdf::<Sha256>::new(Some(KDF_SALT), &ikm)
+                .expand(&keys.transcript, &mut okm)
+                .unwrap();
+            assert_eq!((&okm[..32], &okm[32..]), (&keys.c2s[..], &keys.s2c[..]));
+
             t.push_str(&format!("case {name}\n"));
-            t.push_str(&format!(
-                "client_ephemeral_secret {}\n",
-                hex(&ce.to_bytes())
-            ));
-            t.push_str(&format!(
-                "server_ephemeral_secret {}\n",
-                hex(&se.to_bytes())
-            ));
+            let mut line = |k: &str, v: &[u8]| t.push_str(&format!("{k} {}\n", hex(v)));
+            line("client_ephemeral_secret", &ce.to_bytes());
+            line("client_ephemeral_public", &pubkey(&ce));
+            line("server_ephemeral_secret", &se.to_bytes());
+            line("server_ephemeral_public", &pubkey(&se));
             if let Some(k) = &ss {
-                t.push_str(&format!(
-                    "server_static_secret {}\n",
-                    hex(&k.secret_bytes())
-                ));
-                t.push_str(&format!("server_static_public {}\n", hex(&k.public())));
+                line("server_static_secret", &k.secret_bytes());
+                line("server_static_public", &k.public());
             }
-            t.push_str(&format!("client_hello {}\n", hex(&hello)));
-            t.push_str(&format!("server_hello {}\n", hex(&sh)));
-            t.push_str(&format!("transcript {}\n", hex(&keys.transcript)));
-            t.push_str(&format!("key_c2s {}\n", hex(&keys.c2s)));
-            t.push_str(&format!("key_s2c {}\n", hex(&keys.s2c)));
+            line("client_hello", &hello);
+            line("server_hello", &sh);
+            line("ee", ee.as_bytes());
+            if let Some(es) = &es {
+                line("es", es);
+            }
+            line("transcript", &keys.transcript);
+            line("okm", &okm);
+            line("key_c2s", &keys.c2s);
+            line("key_s2c", &keys.s2c);
+            line("confirm_tag", &sh[sh.len() - 16..]);
             let mut c = OpenSecCipher::new(&keys, false, None);
             let mut s = OpenSecCipher::new(&keys, true, None);
             for (dir, counter, plain) in [
@@ -958,16 +1002,201 @@ mod tests {
                 ("s2c", 1, vec![0x00, 0x04, 0, 0, 0, 0]),
                 ("s2c", 0x1_0000_0005, vec![0x27]),
             ] {
-                let cipher = if dir == "c2s" { &mut c } else { &mut s };
+                let (cipher, d) = if dir == "c2s" {
+                    (&mut c, DIR_C2S)
+                } else {
+                    (&mut s, DIR_S2C)
+                };
                 cipher.send_counter = counter - 1;
-                let mut d = plain.clone();
-                cipher.encrypt(&mut d);
+                let mut wire = plain.clone();
+                cipher.encrypt(&mut wire);
+                t.push_str(&format!(
+                    "nonce {dir} {counter} {}\n",
+                    hex(&nonce(d, counter))
+                ));
                 t.push_str(&format!(
                     "record {dir} {counter} {} {}\n",
                     hex(&plain),
-                    hex(&d)
+                    hex(&wire)
                 ));
             }
+        }
+
+        // Client hellos a server must ignore.
+        let ce = StaticSecret::from(secret(0x10));
+        let good = client_hello(&pubkey(&ce), CAP_SERVER_AUTH);
+        let mut bad_hellos: Vec<(&str, Vec<u8>)> = vec![
+            ("unpadded", good[..42].to_vec()),
+            ("too-long", [&good[..], &[0]].concat()),
+            ("version-2", {
+                let mut h = good.clone();
+                h[6] = 2;
+                h
+            }),
+        ];
+        // Low-order points: zero, one, and a point of order 8 (all give an
+        // all-zero shared secret).
+        for (n, point) in [
+            ("low-order-zero", [0u8; 32]),
+            ("low-order-one", core::array::from_fn(|i| (i == 0) as u8)),
+            (
+                "low-order-eight",
+                unhex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+                    .try_into()
+                    .unwrap(),
+            ),
+        ] {
+            bad_hellos.push((n, client_hello(&point, CAP_SERVER_AUTH)));
+        }
+        let se = StaticSecret::from(secret(0x40));
+        for (n, h) in &bad_hellos {
+            assert!(
+                server_respond(h, &se, None, CAP_SERVER_AUTH).is_none(),
+                "{n}"
+            );
+            t.push_str(&format!("reject-client-hello {n} {}\n", hex(h)));
+        }
+
+        // Server hellos a client must reject. Some are built with a valid
+        // confirmation tag, so that only the rule under test fails.
+        let forge = |caps: u16, e_s: [u8; 32], static_pub: Option<[u8; 32]>, es: &[u8]| {
+            let mut body = vec![0, 2];
+            body.extend_from_slice(&MAGIC);
+            body.extend_from_slice(&[VERSION, 0]);
+            body.extend_from_slice(&caps.to_le_bytes());
+            body.extend_from_slice(&e_s);
+            if let Some(p) = static_pub {
+                body.extend_from_slice(&p);
+            }
+            let ee = ce.diffie_hellman(&PublicKey::from(e_s));
+            let keys = derive(&good, &body, ee.as_bytes(), es);
+            body.extend_from_slice(&confirm_tag(&keys));
+            body
+        };
+        let static_key = ServerKey::from_secret(secret(0x70));
+        let (auth_hello, _) =
+            server_respond(&good, &se, Some(&static_key), CAP_SERVER_AUTH).unwrap();
+        let (anon_hello, _) = server_respond(&good, &se, None, CAP_SERVER_AUTH).unwrap();
+        let flip = |h: &[u8], i: usize| {
+            let mut h = h.to_vec();
+            h[i] ^= 1;
+            h
+        };
+        let low_one: [u8; 32] = core::array::from_fn(|i| (i == 0) as u8);
+        let other_pin = ServerKey::from_secret(secret(0xA0)).public();
+        /// Name, pinned key, server hello.
+        type BadServerHello<'a> = (&'a str, Option<[u8; 32]>, Vec<u8>);
+        let bad_server: Vec<BadServerHello> = vec![
+            ("bad-tag", None, flip(&anon_hello, 57)),
+            ("tampered-ephemeral", None, flip(&anon_hello, 20)),
+            ("tampered-static", None, flip(&auth_hello, 50)),
+            ("tampered-flags", None, flip(&anon_hello, 7)),
+            ("truncated", None, anon_hello[..57].to_vec()),
+            (
+                "auth-length-mismatch",
+                None,
+                [&anon_hello[..], &[0; 32]].concat(),
+            ),
+            ("version-2", None, {
+                let mut h = anon_hello.clone();
+                h[6] = 2;
+                h
+            }),
+            (
+                "unoffered-capability",
+                None,
+                forge(0x0002, pubkey(&se), None, &[]),
+            ),
+            ("low-order-ephemeral", None, forge(0, low_one, None, &[])),
+            (
+                "low-order-static",
+                None,
+                forge(CAP_SERVER_AUTH, pubkey(&se), Some(low_one), &[0; 32]),
+            ),
+            ("pinned-key-mismatch", Some(other_pin), auth_hello.clone()),
+            (
+                "pinned-but-anonymous",
+                Some(static_key.public()),
+                anon_hello.clone(),
+            ),
+        ];
+        for (n, pin, h) in &bad_server {
+            assert!(
+                client_finish(&good, &ce, h, pin.as_ref()).is_err(),
+                "{n} must be rejected"
+            );
+            t.push_str(&format!(
+                "reject-server-hello {n} {} {} {} {}\n",
+                hex(&ce.to_bytes()),
+                hex(&good),
+                pin.map_or("-".to_owned(), |p| hex(&p)),
+                hex(h)
+            ));
+        }
+        // The forged hellos are valid apart from the rule under test.
+        assert!(client_finish(&good, &ce, &forge(0, pubkey(&se), None, &[]), None).is_ok());
+
+        // Receiver counter reconstruction and replay window.
+        let windows: [(&str, &[(u64, bool)]); 6] = [
+            (
+                "in-order-and-replays",
+                &[(1, true), (2, true), (2, true), (1, true), (0, true)],
+            ),
+            (
+                "reordering",
+                &[(5, true), (3, true), (4, true), (3, true), (6, true)],
+            ),
+            (
+                "window-edge",
+                &[(100, true), (37, true), (36, true), (101, true), (38, true)],
+            ),
+            (
+                "forged-records-burn-nothing",
+                &[(7, false), (7, true), (8, false), (8, true)],
+            ),
+            (
+                "across-2^32",
+                &[
+                    (0xFFFF_FFF0, true),
+                    (0x1_0000_0005, true),
+                    (0xFFFF_FFF1, true),
+                    (0xFFFF_FFF0, true),
+                    (0x1_0000_0004, true),
+                ],
+            ),
+            (
+                "far-jumps",
+                &[
+                    (1, true),
+                    (0x8000_0001, true),
+                    (1, true),
+                    (0x8000_0002, true),
+                ],
+            ),
+        ];
+        let (_, keys) = server_respond(&good, &se, None, CAP_SERVER_AUTH).unwrap();
+        for (n, steps) in windows {
+            let mut rx = OpenSecCipher::new(&keys, true, None);
+            t.push_str(&format!("window {n}"));
+            for &(counter, valid) in steps {
+                let mut wire = seal_record(&keys.c2s, Direction::ClientToServer, counter, &[1]);
+                if !valid {
+                    *wire.last_mut().unwrap() ^= 1;
+                }
+                let low = counter as u32;
+                let expanded = rx.expand_counter(low);
+                let accepted = rx.decrypt(&mut wire);
+                t.push_str(&format!(
+                    " {low}{}={}",
+                    if valid { "" } else { "!" },
+                    if accepted {
+                        expanded.to_string()
+                    } else {
+                        "x".to_owned()
+                    }
+                ));
+            }
+            t.push('\n');
         }
         t
     }

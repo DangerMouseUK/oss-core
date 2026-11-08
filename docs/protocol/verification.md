@@ -91,7 +91,7 @@ All S2C and C2S packets round-trip in oss-core's tests and in the conformance ve
 
 | Item | Level | Notes |
 |---|---|---|
-| OpenSec v1 ([opensec.md](opensec.md)) | **Project spec** | Its primitives are checked against RFC 7748, RFC 8439 and RFC 5869 test vectors. An external cryptographic review is still to come |
+| OpenSec v1 ([opensec.md](opensec.md)) | **Project spec** | Its primitives are checked against RFC 7748, RFC 8439 and RFC 5869 test vectors. A second, independent implementation (`opensec_check.py`, written from the spec alone) reproduces every vector, including the negative cases and replay-window sequences. The spec is ready for external cryptographic review, which is still to come |
 | WebSocket relay `oss-relay.1` ([websocket-relay.md](websocket-relay.md)) | **Project spec** | Codec unit tests, fuzzing, and the relay vectors |
 | `.ossr` replays ([../formats/replay.md](../formats/replay.md)) | **Project spec** | |
 

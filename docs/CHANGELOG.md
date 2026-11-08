@@ -4,6 +4,26 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (OpenSec ready for review)
+- **Wire change:** the OpenSec client hello is padded with zeros from 42 to 90 bytes, the size of the largest server hello, so a server never sends more than it received (no UDP amplification). `CLIENT_HELLO_LEN` is now 90. OpenSec isn't deployed anywhere, and both ends use `oss-net`, so nothing else changes. A 42-byte hello is now ignored.
+- Clients reject a server hello that selects a capability they didn't offer, or whose static key gives a low-order X25519 result.
+- The confirmation tag is compared in constant time.
+- `docs/protocol/opensec.md` has been rewritten for external review. It now has:
+  - a threat model with goals and non-goals;
+  - exact server and client checks, in order;
+  - retransmission and duplicate handling;
+  - receiver pseudo-code;
+  - an informal argument for each goal;
+  - implementation requirements;
+  - ten open questions for reviewers.
+- The vectors (`tests/vectors/opensec.txt`) gained:
+  - every intermediate value (public keys, X25519 outputs, OKM, confirmation tag);
+  - nonces;
+  - 6 client hellos a server must ignore;
+  - 12 server hellos a client must reject, each breaking exactly one rule;
+  - 6 replay-window sequences.
+- New `tests/vectors/opensec_check.py`, an independent standard-library Python implementation written from the spec. It reproduces every vector.
+
 ### oss-sim (server-side validation)
 - New `validate` module for anti-cheat: `check_motion(limits, map, prev, next, context, tolerance) -> MotionVerdict` asks whether a ship could have got from one reported state to the next, without stepping the world.
   - Bounds distance, reported speed, rotation, energy, wall passes and capability status bits over the elapsed time, all conservatively. Real flight with lossy sampling must always pass: the tests fly every ship type through walls, pillars and a wormhole with random inputs.
