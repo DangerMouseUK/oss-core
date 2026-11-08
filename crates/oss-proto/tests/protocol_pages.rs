@@ -1505,7 +1505,7 @@ fn pages() -> Vec<Page> {
             "directory::ZoneUpdate",
             "95 or more",
             "0|4|u32|ip|Always 0: the directory uses the datagram's source address\n4|2|u16|port|Game port\n6|2|u16|players|\n8|2|u16|score_keeping|1 if the zone has a billing server\n10|4|u32|version|134\n14|32|char[32]|name|\n46|48|char[48]|password|Directories use only 15 characters\n94|n|char[]|description|NUL-terminated",
-            "Zone → directory, plain UDP to port 4991 about once a minute: no type byte, no transport framing, no reply.",
+            "Zone → directory, plain UDP to port 4991 about once a minute: no type byte, no transport framing, no reply. Send from any (ephemeral) port; the directory reads the game port from offset 4 and pings that port + 1 at the sender's address, so the zone must answer pings there.",
             Vectors,
             "7 packets built by the reference server's directory module decode and re-encode byte for byte (`directory.txt`).",
         ),

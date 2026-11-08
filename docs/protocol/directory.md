@@ -27,7 +27,12 @@ Directory servers reject an update unless:
 - the name is printable;
 - byte 61 is 0 and bytes 62–93 are all 0. Only the first 16 bytes of the password field are used, so a password can have at most 15 characters.
 
-Directories take the game port from the packet, not from the datagram: the reference server sends its registrations from an ephemeral source port. They ping the zone on game port + 1 (see below), so that port must answer. The reference server caps the description at 385 bytes plus its NUL, so the datagram stays at most 480 bytes.
+**Two separate sockets.**
+
+- **Registration socket.** It sends from any port. The reference server binds its registration socket to port 0 (an ephemeral port). Don't bind it to a particular port, and in particular not to game port + 1. The directory learns the game port from offset 4 of the payload, not from the datagram's source port.
+- **Ping socket.** The zone must listen on game port + 1 and answer pings there (see [Zone ping port](#zone-ping-port-game-port--1)). The directory pings the registered port + 1 at the datagram's source *address*: dirserver's `sendPing(ip, port + 1)`.
+
+The reference server caps the description at 385 bytes plus its NUL, so the datagram stays at most 480 bytes.
 
 ## Ping (UDP port 4991)
 

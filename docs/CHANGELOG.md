@@ -4,6 +4,10 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### Docs (review fixes)
+- `directory.md` now spells out the two sockets. The registration socket sends from any port (the reference binds port 0) and must not be bound to game port + 1. The ping socket listens on game port + 1, where the directory pings the registered port at the sender's address. The directory conformance check already followed this rule. (PRIVATE review C1.)
+- `checksums.md`: the map checksum now names the original key `k` and a separate running sum (`sum += k XOR tile`), so the running sum can't be XORed by mistake. (PRIVATE review C2.)
+
 ### oss-conformance (ping port, directory mode)
 - New live server checks:
   - `ping-port`: a zone answers a 4-byte ping on game port + 1 with its population and the echo;

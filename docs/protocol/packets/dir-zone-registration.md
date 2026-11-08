@@ -28,7 +28,7 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 ## Notes
 
-Zone → directory, plain UDP to port 4991 about once a minute: no type byte, no transport framing, no reply.
+Zone → directory, plain UDP to port 4991 about once a minute: no type byte, no transport framing, no reply. Send from any (ephemeral) port; the directory reads the game port from offset 4 and pings that port + 1 at the sender's address, so the zone must answer pings there.
 
 ## Evidence
 
