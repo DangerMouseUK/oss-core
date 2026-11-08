@@ -549,3 +549,223 @@ fn many_flights_are_plausible() {
         fly(seed % 2 == 0, seed);
     }
 }
+
+/// A packet as the server sees it: the sample and the server tick it arrived.
+struct Arrival {
+    sample: Sample,
+    at: u32,
+}
+
+/// Flies a ship and delivers a position packet every 10 ticks over a bad
+/// connection: 2–30 ticks of latency, 8 % loss, 2 % duplicates, and lag spikes
+/// that hold packets for up to 1.5 s and then deliver them in a burst.
+fn deliver(seed: u64, ticks: u32) -> (Vec<Arrival>, ArenaSettings) {
+    let settings = ArenaSettings::default();
+    let mut w = World::new(arena_map(false), settings.clone(), 5);
+    w.prize_seed = 0;
+    w.spawn_center = (512, 512);
+    w.spawn_radius = 4;
+    let i = w.add_ship(1, 0, 0);
+    let mut rng = Lcg(seed);
+    let mut out = Vec::new();
+    let mut input = ShipInput::default();
+    let mut spike_until = 0u32;
+    for t in 0..ticks {
+        if t % 30 == 0 {
+            let r = rng.next(1 << 8);
+            input = ShipInput {
+                forward: r & 3 != 0,
+                afterburner: r & 4 != 0,
+                left: r & 24 == 8,
+                right: r & 24 == 16,
+                ..ShipInput::default()
+            };
+        }
+        w.step(&[input]);
+        if t % 10 != 0 {
+            continue;
+        }
+        let sample = sample(&w, i);
+        let now = w.tick;
+        if spike_until <= now && rng.next(100) < 2 {
+            spike_until = now + 50 + rng.next(100);
+        }
+        if rng.next(100) < 8 {
+            continue; // lost
+        }
+        let mut at = now + 2 + rng.next(29);
+        if at < spike_until {
+            at = spike_until + rng.next(3);
+        }
+        out.push(Arrival { sample, at });
+        if rng.next(100) < 2 {
+            out.push(Arrival {
+                sample,
+                at: at + rng.next(5),
+            });
+        }
+    }
+    out.sort_by_key(|a| a.at); // stable: equal arrivals keep send order
+    (out, settings)
+}
+
+/// Checks packets in arrival order the way a server would: against the last
+/// in-order packet, with elapsed time capped by a [`ClientClock`], and, when
+/// `anchor_ticks` is set, also against the newest packet at least that old.
+/// Returns every finding.
+fn serve(
+    arrivals: &[Arrival],
+    settings: &ArenaSettings,
+    tiles: &TileMap,
+    anchor_ticks: Option<u32>,
+) -> Vec<Finding> {
+    let map = MotionMap::new(tiles);
+    let limits = Limits::new(&settings.ships[0], settings);
+    let tolerance = Tolerance::default();
+    let mut clock = ClientClock::default();
+    let mut prev: Option<Sample> = None;
+    let mut anchors: Vec<Sample> = Vec::new();
+    let mut findings = Vec::new();
+    for a in arrivals {
+        let next = a.sample;
+        let Some(p) = prev else {
+            clock.observe(next.time, a.at);
+            prev = Some(next);
+            anchors.push(next);
+            continue;
+        };
+        let mut check = |from: &Sample| {
+            let context = Context {
+                max_ticks: clock.max_ticks(from.time, a.at, 30),
+                ..Context::default()
+            };
+            let v = check_motion(&limits, &map, from, &next, &context, &tolerance);
+            findings.extend(v.findings());
+        };
+        check(&p);
+        if let Some(span) = anchor_ticks
+            && let Some(old) = anchors
+                .iter()
+                .rev()
+                .find(|s| next.time.wrapping_sub(s.time) as i32 >= span as i32)
+        {
+            check(old);
+        }
+        clock.observe(next.time, a.at);
+        if next.time.wrapping_sub(p.time) as i32 > 0 {
+            prev = Some(next);
+            anchors.push(next);
+        }
+    }
+    findings
+}
+
+#[test]
+fn a_bad_connection_is_plausible() {
+    for seed in 0..20 {
+        let (arrivals, settings) = deliver(seed, 6000);
+        assert!(
+            arrivals
+                .windows(2)
+                .any(|w| w[1].sample.time < w[0].sample.time),
+            "the test should include reordering"
+        );
+        let found = serve(&arrivals, &settings, &arena_map(false), Some(100));
+        assert!(found.is_empty(), "seed {seed}: {found:?}");
+    }
+}
+#[test]
+fn the_clock_guard_stops_a_timestamp_jump_from_excusing_a_teleport() {
+    let a = arena();
+    let limits = Limits::new(&a.ships[0], &a);
+    let empty = TileMap::empty();
+    let map = MotionMap::new(&empty);
+    let tol = Tolerance::default();
+    let mut clock = ClientClock::default();
+    // Honest packets every 10 ticks, arriving 5 ticks after they're sent.
+    let mut prev = at(0, 8000, 8000);
+    clock.observe(prev.time, 5);
+    for k in 1..=5u32 {
+        let next = at(10 * k, 8000 + 30 * k as i32, 8000);
+        let cap = clock.max_ticks(prev.time, 10 * k + 5, 30);
+        let context = Context {
+            max_ticks: cap,
+            ..Context::default()
+        };
+        assert!(check_motion(&limits, &map, &prev, &next, &context, &tol).is_plausible());
+        clock.observe(next.time, 10 * k + 5);
+        prev = next;
+    }
+    // The cheat moves 1000 px and claims 300 extra ticks to explain it.
+    let cheat = at(prev.time + 310, prev.x + 1000, 8000);
+    let trusting = check_motion(&limits, &map, &prev, &cheat, &Context::default(), &tol);
+    assert!(trusting.is_plausible(), "the timestamp alone excuses it");
+    let guarded = Context {
+        max_ticks: clock.max_ticks(prev.time, 65, 30),
+        ..Context::default()
+    };
+    let v = check_motion(&limits, &map, &prev, &cheat, &guarded, &tol);
+    assert!(
+        matches!(v.worst(), Some(Finding::Teleport { percent, .. }) if percent > 300),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_late_burst_after_a_lag_spike_is_not_limited() {
+    let a = arena();
+    let limits = Limits::new(&a.ships[0], &a);
+    let empty = TileMap::empty();
+    let map = MotionMap::new(&empty);
+    let mut clock = ClientClock::default();
+    clock.observe(0, 5);
+    let prev = at(0, 8000, 8000);
+    // Sent 150 ticks later at top speed, but delivered after a 2 s stall, in
+    // the same tick as several others: the server's own clock says almost no
+    // time has passed since the last delivery, but the client's is right.
+    let next = at(150, 8000 + 480, 8000);
+    let cap = clock.max_ticks(prev.time, 205, 30);
+    assert!(cap.unwrap() >= 150);
+    let v = check_motion(
+        &limits,
+        &map,
+        &prev,
+        &next,
+        &Context {
+            max_ticks: cap,
+            ..Context::default()
+        },
+        &Tolerance::default(),
+    );
+    assert!(v.is_plausible(), "{v:?}");
+}
+
+#[test]
+fn a_moderate_speedhack_shows_over_a_second_not_per_packet() {
+    let a = arena();
+    let limits = Limits::new(&a.ships[0], &a);
+    let empty = TileMap::empty();
+    let map = MotionMap::new(&empty);
+    let tol = Tolerance::default();
+    // 1.5x the afterburner top speed (3250 px/10 s), honestly timestamped.
+    let fly = |t: u32| at(t, 4000 + (t * 4875 / 1000) as i32, 8000);
+    let check = |from: u32, to: u32| {
+        check_motion(
+            &limits,
+            &map,
+            &fly(from),
+            &fly(to),
+            &Context::default(),
+            &tol,
+        )
+    };
+    assert!(
+        (0..100)
+            .step_by(10)
+            .all(|t| check(t, t + 10).is_plausible())
+    );
+    assert!(matches!(
+        check(0, 100).worst(),
+        Some(Finding::Teleport { .. })
+    ));
+}

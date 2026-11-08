@@ -19,13 +19,31 @@
 //!
 //! Typical use, per player:
 //!
-//! 1. When the player enters a ship, build [`Limits`] for it (from settings, or
-//!    tighter from a tracked [`Loadout`](crate::Loadout)), and once per map a
-//!    [`MotionMap`].
-//! 2. For each accepted position packet, call [`check_motion`] with the previous
-//!    accepted [`Sample`], the new one and a [`Context`] saying what the server
-//!    knows happened in between (a respawn, weapons fired).
-//! 3. Feed [`MotionVerdict::findings`] into the trust score.
+//! 1. When the player enters a ship, build [`Limits`] for it, and once per map
+//!    a [`MotionMap`]. Prefer [`Limits::for_loadout`] with a tracked
+//!    [`Loadout`]: the any-loadout limits allow rocket speed
+//!    whenever the ship type can carry rockets (5500 against 3250 for stock
+//!    ships), which hides most speedhacks.
+//! 2. For each position packet, in arrival order, call [`check_motion`]. Pass
+//!    the last in-order [`Sample`], the new one, and a [`Context`] saying what
+//!    the server knows happened in between (a respawn, a repel, weapons fired,
+//!    and a [`ClientClock`] cap). Out-of-order and duplicate packets are safe
+//!    to pass; the verdict marks them `reordered`.
+//! 3. About once a second, also check the new sample against one about a
+//!    second old. Tolerances are sized for jitter, so they swamp a 10-tick
+//!    interval: a ship at 1.5x top speed passes every packet-to-packet check
+//!    and fails the one-second one.
+//! 4. Feed [`MotionVerdict::findings`] into the trust score, weighted by
+//!    [`Finding::severity`].
+//!
+//! What this can't see: a client whose whole clock runs fast (a timer hack)
+//! moves at a plausible speed *by its own timestamps*. [`ClientClock`] stops a
+//! timestamp from leaping ahead to excuse a jump, but a steady skew needs a
+//! clock-rate check over a long window.
+//!
+//! The tests drive the real simulation through a simulated bad connection:
+//! loss, 2-30 ticks of latency, duplicates, and lag spikes that deliver 1.5 s
+//! of packets in a burst. Every packet must pass, checked as above.
 
 #![warn(missing_docs)]
 
@@ -36,6 +54,7 @@ use crate::loadout::Loadout;
 use crate::map::{MAP_TILES, TileMap, is_solid_id, tile};
 use crate::settings::{ArenaSettings, ShipSettings};
 use crate::ship::cap;
+use crate::weapons::{Fired, fire_cost, flagger_cost};
 
 /// Position packet status bits a ship needs the matching capability for:
 /// stealth, cloak, X-radar and antiwarp (the same bit values as [`cap`]).
@@ -271,8 +290,12 @@ impl Default for Tolerance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Context {
     /// The ship legitimately jumped: respawn, ship or frequency change, a
-    /// `?warpto`, attaching to or detaching from a turret, or anything else the
-    /// server moved it for. Skips the distance and wall checks.
+    /// `?warpto`, attaching to or detaching from a turret, a Warp prize, or
+    /// anything else the server moved it for. Skips the distance, wall and
+    /// rotation checks.
+    ///
+    /// Don't check a ship's motion at all while it rides another as a turret:
+    /// it moves with its host, which may be a faster ship type. Check the host.
     pub jumped: bool,
     /// The ship may have been repelled (an enemy repel went off within
     /// `Repel:Distance` of it within the last `Repel:Time` ticks), so it may
@@ -282,16 +305,27 @@ pub struct Context {
     /// positive capability prize the arena doesn't allow (which gives a full
     /// charge instead).
     pub refilled: bool,
-    /// Energy points spent on weapons the server saw fired after `prev` up to and
-    /// including `next` (see [`fire_cost`](crate::fire_cost); divide its
-    /// milli-points by 1000). Leave out shots fired within `SuperTime` ticks of
-    /// a Super prize: weapons are free while it lasts, for a random time below
-    /// that.
+    /// Energy points spent on weapons the server saw in packets strictly
+    /// *between* `prev` and `next`, priced with [`least_fire_cost`].
+    ///
+    /// Overstating this makes the energy bound too low, which is a false
+    /// positive, so every choice here errs low:
+    /// - Leave out the weapons carried by `prev` and `next` themselves, since
+    ///   it isn't known whether a packet's energy is before or after its own
+    ///   shot.
+    /// - Price shots with [`least_fire_cost`], which allows for flagger
+    ///   discounts (flag carriers, and ball carriers under `Soccer:UseFlagger`).
+    /// - Leave out shots fired within `SuperTime` ticks of a Super prize:
+    ///   weapons are free while it lasts, for a random time below that.
     pub spent: i32,
-    /// Caps the elapsed time taken from the client's timestamps. A server that
-    /// passes its own elapsed ticks plus some slack stops a client from widening
-    /// every bound by skewing its clock; `None` trusts the timestamps (and leaves
-    /// clock checks to the caller).
+    /// Caps the elapsed time taken from the client's timestamps, so a client
+    /// can't widen every bound by running its clock fast. Use
+    /// [`ClientClock::max_ticks`].
+    ///
+    /// Don't use the server's own time between the two packets: after a lag
+    /// spike, packets arrive bunched together, and their true client times are
+    /// far apart. `None` trusts the timestamps, which leaves clock checks to the
+    /// caller.
     pub max_ticks: Option<u32>,
 }
 
@@ -302,6 +336,9 @@ pub struct Context {
 pub struct MotionVerdict {
     /// Elapsed ticks the bounds were computed for (tolerance included).
     pub ticks: u32,
+    /// `next` is older than `prev` (packets arrived out of order). Motion is
+    /// checked over the absolute time difference; energy isn't checked.
+    pub reordered: bool,
     /// Distance travelled, as a percentage of the furthest reachable.
     pub distance_percent: u32,
     /// Reported speed, as a percentage of the fastest possible.
@@ -460,6 +497,75 @@ pub fn energy_bounds(
     0..=hi.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
+/// The cheapest a shot can be, in energy points: [`fire_cost`] or, if
+/// cheaper, the flagger price under `Flag:FlaggerFireCostPercent`. Use it for
+/// [`Context::spent`]. The flagger price applies to flag carriers, and to ball
+/// carriers when `Soccer:UseFlagger` is set, and the server may not track
+/// either exactly.
+pub fn least_fire_cost(ship: &ShipSettings, arena: &ArenaSettings, fired: Fired) -> i32 {
+    let cost = fire_cost(ship, fired);
+    cost.min(flagger_cost(cost, arena.flagger.fire_cost_percent)) / 1000
+}
+
+/// Tracks how far a client's timestamps run ahead of the server's clock, to
+/// cap [`Context::max_ticks`] in a way that tolerates lag spikes.
+///
+/// A packet stamped at client time `c` arrives at server time `s = c - offset +
+/// latency`. So `c - s`, the client's lead, is at most `offset - latency`, and
+/// the highest lead seen so far bounds every later packet. A packet that
+/// arrives late (lag, bunching) has a *lower* lead and is never limited; only a
+/// timestamp further ahead of the server's clock than any before it is.
+///
+/// Feed every position packet to [`observe`](Self::observe), *after*
+/// computing its cap.
+///
+/// This is a guard against jumps, not a clock-rate check. A timestamp that
+/// leaps ahead to excuse a teleport is capped, and costs one finding. The lead
+/// then ratchets up to the new value, so a client whose clock has really
+/// stepped never collects a stream of false positives. For the same reason, a
+/// clock that runs steadily fast raises the lead a little with each packet and
+/// passes; catching that needs a rate check over a longer window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientClock {
+    /// First (client, server) pair; leads are measured from it.
+    base: Option<(u32, u32)>,
+    /// Highest lead seen, in ticks.
+    max_lead: i64,
+}
+
+impl ClientClock {
+    /// Records a packet's client timestamp and the server time (ticks) it
+    /// arrived at.
+    pub fn observe(&mut self, client: u32, server: u32) {
+        match self.base {
+            None => {
+                self.base = Some((client, server));
+                self.max_lead = 0;
+            }
+            Some(_) => self.max_lead = self.max_lead.max(self.lead(client, server)),
+        }
+    }
+
+    fn lead(&self, client: u32, server: u32) -> i64 {
+        let (c0, s0) = self.base.unwrap_or((client, server));
+        client.wrapping_sub(c0) as i32 as i64 - server.wrapping_sub(s0) as i32 as i64
+    }
+
+    /// The most ticks a packet arriving at `server_now` can legitimately claim
+    /// after `prev_client`. `None` before the first [`observe`](Self::observe).
+    ///
+    /// `slack` must cover the spread of the connection's latency, not just its
+    /// jitter: a packet delivered faster than any before it leads the clock by
+    /// the difference. 30 ticks (0.3 s) suits ordinary connections. A few
+    /// ticks too little is a false positive; a few too many costs little.
+    pub fn max_ticks(&self, prev_client: u32, server_now: u32, slack: u32) -> Option<u32> {
+        let (c0, s0) = self.base?;
+        let latest = server_now.wrapping_sub(s0) as i32 as i64 + self.max_lead + slack as i64;
+        let prev = prev_client.wrapping_sub(c0) as i32 as i64;
+        Some((latest - prev).clamp(0, u32::MAX as i64) as u32)
+    }
+}
+
 /// Checks whether a ship could have gone from `prev` to `next`.
 ///
 /// Elapsed time comes from the samples' client timestamps (wrapping; a sample
@@ -487,8 +593,15 @@ pub fn check_motion(
     tolerance: &Tolerance,
 ) -> MotionVerdict {
     let client_ticks = next.time.wrapping_sub(prev.time) as i32;
-    let mut ticks = client_ticks.max(0) as u32;
-    if let Some(cap) = context.max_ticks {
+    // Motion bounds are symmetric in time, so a reordered pair is checked
+    // over the absolute difference rather than over no time at all.
+    let reordered = client_ticks < 0;
+    let mut ticks = client_ticks.unsigned_abs();
+    // The cap bounds how far a timestamp runs *ahead*; it says nothing about
+    // an older packet arriving late.
+    if let Some(cap) = context.max_ticks
+        && !reordered
+    {
         ticks = ticks.min(cap);
     }
     // Beyond ten minutes the bounds mean nothing anyway; the cap keeps the
@@ -557,9 +670,12 @@ pub fn check_motion(
 
     // Energy.
     let bounds = energy_bounds(limits, prev.energy, ticks, context.spent, context.refilled);
-    let energy_excess = if bounds.is_empty() {
-        // Couldn't afford what it fired: the shortfall is the excess.
-        (-*bounds.end()).max(1)
+    let energy_excess = if reordered {
+        0
+    } else if bounds.is_empty() {
+        // Couldn't afford what it fired: the shortfall (beyond tolerance) is
+        // the excess.
+        (-(*bounds.end() as i64) - tolerance.energy as i64).clamp(0, i32::MAX as i64) as i32
     } else {
         (next.energy as i64 - *bounds.end() as i64 - tolerance.energy as i64)
             .clamp(0, i32::MAX as i64) as i32
@@ -572,6 +688,7 @@ pub fn check_motion(
 
     MotionVerdict {
         ticks,
+        reordered,
         distance_percent,
         speed_percent,
         rotation_percent,

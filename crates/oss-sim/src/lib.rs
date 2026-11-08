@@ -31,8 +31,8 @@ pub use settings::{
 };
 pub use ship::{Items, Ship, ShipInput, ShipState, ShipStats, cap, toggle};
 pub use validate::{
-    CAPABILITY_STATUS, Context, Finding, Limits, MotionMap, MotionVerdict, STATUS_FLASH, Sample,
-    Tolerance, WallCheck, check_motion, energy_bounds,
+    CAPABILITY_STATUS, ClientClock, Context, Finding, Limits, MotionMap, MotionVerdict,
+    STATUS_FLASH, Sample, Tolerance, WallCheck, check_motion, energy_bounds, least_fire_cost,
 };
 pub use weapons::{Fired, Projectile, ProjectileKind, ProxTrigger, fire_cost, flagger_cost};
 pub use world::{Brick, Event, World};

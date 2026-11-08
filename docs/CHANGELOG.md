@@ -4,6 +4,24 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-sim (validation hardened against false positives)
+- **Reordered samples.** `check_motion` now checks a pair whose `next` is older than `prev` over the absolute time difference, and skips energy for it. Before, such a pair was checked over zero ticks. It is marked with the new `MotionVerdict::reordered`, and `Context::max_ticks` no longer applies to it.
+- **Unaffordable spending** is now judged with the energy tolerance, like the other energy checks.
+- **`Context::spent`** guidance now errs low:
+  - count only shots *between* the two samples;
+  - price them with the new `least_fire_cost`, which allows for flagger discounts, including ball carriers under `Soccer:UseFlagger`;
+  - skip Super.
+- **New `ClientClock`.** It produces `Context::max_ticks` from the highest lead the client's clock has shown over the server's. Packets bunched after a lag spike are never limited, whereas the earlier advice, "server elapsed time plus slack", gave false teleports for them. It guards against timestamp jumps; it is not a clock-rate check.
+- **Docs:**
+  - check about once a second against a sample a second old; a 1.5x speedhack passes every packet-to-packet check but fails that one;
+  - prefer `Limits::for_loadout`;
+  - don't check turret riders.
+- **New tests:**
+  - 20 seeds of the real simulation behind a bad connection (loss, 2–30 ticks of latency, duplicates, reordering, 1.5 s lag bursts), checked in arrival order: no findings;
+  - a timestamp jump excusing a teleport is caught;
+  - a late burst is not limited;
+  - a 1.5x speedhack shows over one second.
+
 ### oss-net (OpenSec ready for review)
 - **Wire change:** the OpenSec client hello is padded with zeros from 42 to 90 bytes, the size of the largest server hello, so a server never sends more than it received (no UDP amplification). `CLIENT_HELLO_LEN` is now 90. OpenSec isn't deployed anywhere, and both ends use `oss-net`, so nothing else changes. A 42-byte hello is now ignored.
 - Clients reject a server hello that selects a capability they didn't offer, or whose static key gives a low-order X25519 result.
