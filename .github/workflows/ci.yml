@@ -44,6 +44,18 @@ jobs:
       - run: cargo check --target wasm32-unknown-unknown -p oss-proto -p oss-formats
       - run: cargo check --target wasm32-unknown-unknown -p oss-net --no-default-features --features opensec
 
+  # The fuzz crate is outside the workspace; only check that its targets still
+  # compile (running them needs nightly and cargo-fuzz; see fuzz/README.md).
+  fuzz-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bins
+
   msrv:
     runs-on: ubuntu-latest
     steps:

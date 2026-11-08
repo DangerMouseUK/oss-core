@@ -1,0 +1,100 @@
+[package]
+name = "oss-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "cargo-fuzz targets for the oss-core decoders and transport"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Kept out of the main workspace so `cargo build --workspace` and CI stay fast.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oss-proto = { path = "../crates/oss-proto" }
+oss-net = { path = "../crates/oss-net" }
+oss-formats = { path = "../crates/oss-formats" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "proto_c2s"
+path = "fuzz_targets/proto_c2s.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_s2c"
+path = "fuzz_targets/proto_s2c.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_core"
+path = "fuzz_targets/proto_core.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_misc"
+path = "fuzz_targets/proto_misc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formats_lvl"
+path = "fuzz_targets/formats_lvl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formats_lvz"
+path = "fuzz_targets/formats_lvz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formats_replay"
+path = "fuzz_targets/formats_replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_server"
+path = "fuzz_targets/net_server.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_client"
+path = "fuzz_targets/net_client.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_vie"
+path = "fuzz_targets/net_vie.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_opensec"
+path = "fuzz_targets/net_opensec.rs"
+test = false
+doc = false
+bench = false

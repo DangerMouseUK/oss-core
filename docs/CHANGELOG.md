@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### Fuzzing
+- `fuzz/`: cargo-fuzz targets for every decoder and for the transport, kept out of the workspace build (CI only checks that they compile). See `fuzz/README.md`.
+  - Decoders: all C2S/S2C packets, core `0x00` packets, billing and directory packets, `.lvl`/eLVL, region bitmaps, `.lvz`, `.ossr`.
+  - Transport: `Server` and an established client `Connection` fed arbitrary datagrams, interleaved with sends, big and sized transfers, and disconnects.
+  - Ciphers: VIE with arbitrary keys; OpenSec records checked against a reference replay window, plus both handshakes.
+  - Besides "no panic", targets check that decoded values re-encode to the same value and that no datagram exceeds `max_send`.
+- Four minutes per target found no crashes, hangs or invariant failures. One harness finding: decoding a position or weapon packet keeps the received checksum, while encoding always writes a fresh one. That is intended, and now documented in the targets.
+
 ### Packaging
 - crates.io-ready metadata for each crate: keywords, categories, homepage and documentation links, a README (its example compiles as a doctest), a LICENSE file, and docs.rs `all-features` for `oss-net`.
 - `cargo package --workspace` passes.
