@@ -38,6 +38,7 @@ pub mod cipher;
 mod connection;
 #[cfg(feature = "opensec")]
 pub mod opensec;
+pub mod relay;
 mod server;
 pub mod vie;
 

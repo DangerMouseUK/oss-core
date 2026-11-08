@@ -15,6 +15,7 @@
 | `net_client` | an established client `Connection` fed arbitrary datagrams | same |
 | `net_vie` | VIE with arbitrary keys | encrypt → decrypt is the identity |
 | `net_opensec` | OpenSec records against a reference replay window; server and client handshakes | exactly the right records are accepted, with their plaintext; tampered and truncated records are rejected |
+| `net_relay` | WebSocket relay frames and the stream decoder | frames re-encode; any split of a stream decodes the same |
 
 ## Running
 

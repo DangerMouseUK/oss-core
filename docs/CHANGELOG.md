@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (browsers)
+- All three crates build for `wasm32-unknown-unknown` with default features. On that target, `os-entropy` takes its randomness from the browser's Web Crypto API (getrandom's `wasm_js` backend), so OpenSec works in browsers without extra setup.
+- CI builds and lints the wasm target for every crate, and builds `oss-net` without features.
+- New `relay` module: the `oss-relay.1` WebSocket relay framing for browser clients (spec in `docs/protocol/websocket-relay.md`).
+  - `Frame` covers `Datagram`, `Hello`, `Welcome` and `Close`, with `decode` and `encode`, and `CloseReason`.
+  - For byte streams: `StreamDecoder` (`push`, `next_frame`, `buffered`, `is_broken`) and `write_stream_frame`.
+  - The codec is sans-IO and has a fuzz target, `net_relay`.
+
 ### Fuzzing
 - `fuzz/`: cargo-fuzz targets for every decoder and for the transport, kept out of the workspace build (CI only checks that they compile). See `fuzz/README.md`.
   - Decoders: all C2S/S2C packets, core `0x00` packets, billing and directory packets, `.lvl`/eLVL, region bitmaps, `.lvz`, `.ossr`.

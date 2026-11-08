@@ -16,8 +16,8 @@ categories = ["game-development", "network-programming", "cryptography"]
 default = ["opensec", "os-entropy"]
 ## OpenSec encryption (X25519 + ChaCha20-Poly1305).
 opensec = ["dep:x25519-dalek", "dep:chacha20poly1305", "dep:hkdf", "dep:sha2"]
-## `opensec::os_entropy`, randomness from the operating system. On
-## wasm32-unknown-unknown the final binary must configure getrandom's backend.
+## `opensec::os_entropy`, randomness from the operating system (in browsers,
+## `crypto.getRandomValues` on wasm32-unknown-unknown).
 os-entropy = ["dep:getrandom"]
 
 [dependencies]
@@ -26,6 +26,11 @@ getrandom = { version = "0.4.3", optional = true }
 hkdf = { version = "0.13.0", optional = true }
 sha2 = { version = "0.11.1", optional = true }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"], optional = true }
+
+# Browsers: wasm32-unknown-unknown has no OS, so take randomness from the Web
+# Crypto API.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4.3", optional = true, features = ["wasm_js"] }
 
 [lints]
 workspace = true
