@@ -4,6 +4,27 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (OpenSec client identities)
+- **New capability `CAP_CLIENT_AUTH` (0x0002)** for servers that tie bans or accounts to a key. Proposed by SERVER and specified in `docs/protocol/opensec.md` (sections 4.6 and 6, reviewer questions 11–12).
+  - The client puts its long-term identity key in the hello's padding, so the hello stays 90 bytes.
+  - A server that accepts identities mixes `X25519(es, Ic)` into the keys, so a client without the private half can't complete the session.
+  - Peers without it are unaffected; the existing vectors are byte-identical.
+- **Server API:**
+  - `OpenSecAcceptor::with_client_identities()`.
+  - `Connection::peer_key()` then returns the client's key, **but only after a record from the client has authenticated.** At the `Connected` event it is still `None`, so read it when handling the login.
+- **Client API:** `OpenSecClientHandshake::with_identity(key)`.
+- **Other new items:**
+  - `IdentityKey`, an alias of `ServerKey`, the long-term key-pair type;
+  - `client_hello_with_identity` and `client_finish_with_identity`;
+  - `SessionKeys::client_identity`.
+- **Vectors:**
+  - three new handshakes: both sides authenticated, client-only, and an identity a server ignores;
+  - a low-order identity rejection;
+  - an unoffered-`CLIENT_AUTH` rejection.
+
+  `reject-client-hello` lines now carry the server's capabilities. The independent Python checker reproduces all of them.
+- **Conformance:** `opensec.client_hello` and `opensec.client_keys` take an optional identity secret.
+
 ### oss-sim (validation hardened against false positives)
 - **Reordered samples.** `check_motion` now checks a pair whose `next` is older than `prev` over the absolute time difference, and skips energy for it. Before, such a pair was checked over zero ticks. It is marked with the new `MotionVerdict::reordered`, and `Context::max_ticks` no longer applies to it.
 - **Unaffordable spending** is now judged with the energy tolerance, like the other energy checks.

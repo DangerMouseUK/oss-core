@@ -35,6 +35,7 @@ fn opensec(c: &mut Criterion) {
         transcript: [1; 32],
         c2s: [2; 32],
         s2c: [3; 32],
+        client_identity: None,
     };
     let mut g = c.benchmark_group("opensec");
     for len in [16usize, 64, 256, 491] {

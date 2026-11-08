@@ -32,6 +32,10 @@ pub const VERSION: u8 = 1;
 /// Capability: the server has a static key, sent in its hello and mixed into
 /// the session keys.
 pub const CAP_SERVER_AUTH: u16 = 0x0001;
+/// Capability: the client has a long-term identity key, sent in its hello and
+/// (when the server selects this) mixed into the session keys, so a client
+/// that doesn't hold the private half can't complete the session.
+pub const CAP_CLIENT_AUTH: u16 = 0x0002;
 /// First byte of every encrypted datagram.
 pub const RECORD_MARKER: u8 = 0xF5;
 /// Bytes added to each datagram: marker, counter, tag.
@@ -62,7 +66,8 @@ pub fn os_entropy() -> Entropy {
     })
 }
 
-/// An X25519 key pair for a server's long-term identity.
+/// A long-term X25519 key pair: a server's static key, or a client's identity
+/// key ([`IdentityKey`]).
 #[derive(Clone)]
 pub struct ServerKey {
     secret: StaticSecret,
@@ -96,7 +101,7 @@ impl ServerKey {
         self.secret.to_bytes()
     }
 
-    /// The public key clients pin.
+    /// The public key (the one clients pin, or a client's identity).
     pub fn public(&self) -> [u8; 32] {
         PublicKey::from(&self.secret).to_bytes()
     }
@@ -211,7 +216,15 @@ pub struct SessionKeys {
     pub c2s: [u8; 32],
     /// Server-to-client key.
     pub s2c: [u8; 32],
+    /// The client's identity key, when `CLIENT_AUTH` was selected. It is only
+    /// *claimed* until a record from the client authenticates under these keys.
+    pub client_identity: Option<[u8; 32]>,
 }
+
+/// A client's long-term identity key pair (the same type as a server's key).
+/// Generate one per installation or account with [`ServerKey::generate`] and
+/// keep it.
+pub type IdentityKey = ServerKey;
 
 impl core::fmt::Debug for SessionKeys {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -219,16 +232,21 @@ impl core::fmt::Debug for SessionKeys {
     }
 }
 
-/// Derives the session keys. `es` is the ephemeral-static secret when the
-/// server authenticates, else empty.
-fn derive(client_hello: &[u8], server_hello_body: &[u8], ee: &[u8; 32], es: &[u8]) -> SessionKeys {
+/// Derives the session keys. `extra` is `es_static || se`: each part present
+/// only when its capability is selected.
+fn derive(
+    client_hello: &[u8],
+    server_hello_body: &[u8],
+    ee: &[u8; 32],
+    extra: &[u8],
+) -> SessionKeys {
     let mut h = Sha256::new();
     h.update(client_hello);
     h.update(server_hello_body);
     let transcript: [u8; 32] = h.finalize().into();
-    let mut ikm = Vec::with_capacity(64);
+    let mut ikm = Vec::with_capacity(96);
     ikm.extend_from_slice(ee);
-    ikm.extend_from_slice(es);
+    ikm.extend_from_slice(extra);
     let mut okm = [0u8; 64];
     Hkdf::<Sha256>::new(Some(KDF_SALT), &ikm)
         .expand(&transcript, &mut okm)
@@ -237,6 +255,7 @@ fn derive(client_hello: &[u8], server_hello_body: &[u8], ee: &[u8; 32], es: &[u8
         transcript,
         c2s: [0; 32],
         s2c: [0; 32],
+        client_identity: None,
     };
     keys.c2s.copy_from_slice(&okm[..32]);
     keys.s2c.copy_from_slice(&okm[32..]);
@@ -247,8 +266,23 @@ fn confirm_tag(keys: &SessionKeys) -> [u8; 16] {
     aead::Key::new(&keys.s2c).seal(nonce(DIR_S2C, 0), &keys.transcript, &mut [])
 }
 
-/// Builds a client hello.
+/// Builds a client hello without an identity (`CAP_CLIENT_AUTH` is cleared).
 pub fn client_hello(ephemeral_public: &[u8; 32], caps: u16) -> Vec<u8> {
+    client_hello_with_identity(ephemeral_public, caps & !CAP_CLIENT_AUTH, None)
+}
+
+/// Builds a client hello. With `identity` (the public half of an
+/// [`IdentityKey`]), it offers `CAP_CLIENT_AUTH` and carries the key at
+/// offset 42, inside the padding, so the hello stays 90 bytes.
+pub fn client_hello_with_identity(
+    ephemeral_public: &[u8; 32],
+    caps: u16,
+    identity: Option<&[u8; 32]>,
+) -> Vec<u8> {
+    let caps = match identity {
+        Some(_) => caps | CAP_CLIENT_AUTH,
+        None => caps & !CAP_CLIENT_AUTH,
+    };
     let mut v = Vec::with_capacity(CLIENT_HELLO_LEN);
     v.extend_from_slice(&[0, 1]);
     v.extend_from_slice(&MAGIC);
@@ -256,6 +290,9 @@ pub fn client_hello(ephemeral_public: &[u8; 32], caps: u16) -> Vec<u8> {
     v.push(0);
     v.extend_from_slice(&caps.to_le_bytes());
     v.extend_from_slice(ephemeral_public);
+    if let Some(id) = identity {
+        v.extend_from_slice(id);
+    }
     v.resize(CLIENT_HELLO_LEN, 0);
     v
 }
@@ -336,6 +373,10 @@ pub struct OpenSecCipher {
     recv_highest: u64,
     recv_window: u64,
     peer_key: Option<[u8; 32]>,
+    /// Whether `peer_key` is proven: at once on the client (the confirmation
+    /// tag proves the server's key), after the first authenticated record on
+    /// the server (only then is the client's identity more than a claim).
+    peer_proven: bool,
 }
 
 impl core::fmt::Debug for OpenSecCipher {
@@ -347,7 +388,9 @@ impl core::fmt::Debug for OpenSecCipher {
 }
 
 impl OpenSecCipher {
-    /// The cipher for one side of a session.
+    /// The cipher for one side of a session. On the server, `peer_key` is the
+    /// client's identity ([`SessionKeys::client_identity`]); [`Cipher::peer_key`]
+    /// reports it only once a record from the client has authenticated.
     pub fn new(keys: &SessionKeys, is_server: bool, peer_key: Option<[u8; 32]>) -> Self {
         let c2s = aead::Key::new(&keys.c2s);
         let s2c = aead::Key::new(&keys.s2c);
@@ -365,6 +408,7 @@ impl OpenSecCipher {
             recv_highest: 0,
             recv_window: 0,
             peer_key,
+            peer_proven: !is_server,
         }
     }
 
@@ -445,6 +489,7 @@ impl Cipher for OpenSecCipher {
             return false;
         }
         self.record(counter);
+        self.peer_proven = true;
         datagram.truncate(tag_at);
         datagram.drain(..5);
         true
@@ -463,7 +508,7 @@ impl Cipher for OpenSecCipher {
     }
 
     fn peer_key(&self) -> Option<[u8; 32]> {
-        self.peer_key
+        self.peer_key.filter(|_| self.peer_proven)
     }
 }
 
@@ -476,6 +521,10 @@ fn random_secret(entropy: &Entropy) -> StaticSecret {
 /// The server side of the handshake, as a pure function: given the client
 /// hello and the server's ephemeral (and optional static) secret, returns the
 /// server hello and the session keys. `None` if the hello is invalid.
+///
+/// Put `CAP_CLIENT_AUTH` in `server_caps` to accept client identities: when the
+/// client offers one, it is mixed into the keys and returned in
+/// [`SessionKeys::client_identity`].
 pub fn server_respond(
     client_hello: &[u8],
     ephemeral: &StaticSecret,
@@ -492,7 +541,8 @@ pub fn server_respond(
     let mut e_c = [0u8; 32];
     e_c.copy_from_slice(&client_hello[10..42]);
     let e_c = PublicKey::from(e_c);
-    let mut caps = client_caps & server_caps;
+    // A v1 server knows only these two capabilities.
+    let mut caps = client_caps & server_caps & (CAP_SERVER_AUTH | CAP_CLIENT_AUTH);
     if static_key.is_some() {
         caps |= CAP_SERVER_AUTH;
     } else {
@@ -502,6 +552,18 @@ pub fn server_respond(
     if !ee.was_contributory() {
         return None;
     }
+    let mut identity = None;
+    let mut se = None;
+    if caps & CAP_CLIENT_AUTH != 0 {
+        let mut i_c = [0u8; 32];
+        i_c.copy_from_slice(&client_hello[42..74]);
+        let shared = ephemeral.diffie_hellman(&PublicKey::from(i_c));
+        if !shared.was_contributory() {
+            return None;
+        }
+        identity = Some(i_c);
+        se = Some(shared);
+    }
     let mut hello = Vec::with_capacity(SERVER_HELLO_AUTH_LEN);
     hello.extend_from_slice(&[0, 2]);
     hello.extend_from_slice(&MAGIC);
@@ -509,12 +571,16 @@ pub fn server_respond(
     hello.push(0);
     hello.extend_from_slice(&caps.to_le_bytes());
     hello.extend_from_slice(PublicKey::from(ephemeral).as_bytes());
-    let mut es = Vec::new();
+    let mut extra = Vec::new();
     if let Some(k) = static_key {
         hello.extend_from_slice(&k.public());
-        es.extend_from_slice(k.secret.diffie_hellman(&e_c).as_bytes());
+        extra.extend_from_slice(k.secret.diffie_hellman(&e_c).as_bytes());
     }
-    let keys = derive(client_hello, &hello, ee.as_bytes(), &es);
+    if let Some(se) = &se {
+        extra.extend_from_slice(se.as_bytes());
+    }
+    let mut keys = derive(client_hello, &hello, ee.as_bytes(), &extra);
+    keys.client_identity = identity;
     hello.extend_from_slice(&confirm_tag(&keys));
     Some((hello, keys))
 }
@@ -543,6 +609,15 @@ impl OpenSecAcceptor {
             entropy,
         }
     }
+
+    /// Also accepts client identity keys (`CAP_CLIENT_AUTH`). A connection's
+    /// [`Connection::peer_key`](crate::Connection::peer_key) then returns the
+    /// client's key, but only after a record from the client has authenticated,
+    /// so read it when handling the login, not at the `Connected` event.
+    pub fn with_client_identities(mut self) -> Self {
+        self.caps |= CAP_CLIENT_AUTH;
+        self
+    }
 }
 
 impl Acceptor for OpenSecAcceptor {
@@ -553,19 +628,33 @@ impl Acceptor for OpenSecAcceptor {
         let e = random_secret(&self.entropy);
         let (hello, keys) = server_respond(first, &e, self.key.as_ref(), self.caps)?;
         out.push(hello);
+        let identity = keys.client_identity;
         Some(Accept::Established(Box::new(OpenSecCipher::new(
-            &keys, true, None,
+            &keys, true, identity,
         ))))
     }
 }
 
 /// The client side of the handshake, as a pure function: verifies the server
 /// hello and returns the session keys and the server's static key (if any).
+/// For a client without an identity key; see [`client_finish_with_identity`].
 pub fn client_finish(
     client_hello: &[u8],
     ephemeral: &StaticSecret,
     server_hello: &[u8],
     pinned: Option<&[u8; 32]>,
+) -> Result<(SessionKeys, Option<[u8; 32]>), &'static str> {
+    client_finish_with_identity(client_hello, ephemeral, server_hello, pinned, None)
+}
+
+/// [`client_finish`] for a client that offered an identity key in its hello
+/// ([`client_hello_with_identity`]).
+pub fn client_finish_with_identity(
+    client_hello: &[u8],
+    ephemeral: &StaticSecret,
+    server_hello: &[u8],
+    pinned: Option<&[u8; 32]>,
+    identity: Option<&IdentityKey>,
 ) -> Result<(SessionKeys, Option<[u8; 32]>), &'static str> {
     if server_hello.len() < SERVER_HELLO_LEN
         || server_hello[..2] != [0, 2]
@@ -598,7 +687,7 @@ pub fn client_finish(
     if !ee.was_contributory() {
         return Err("invalid server key share");
     }
-    let mut es = Vec::new();
+    let mut extra = Vec::new();
     let mut server_key = None;
     if auth {
         let mut s = [0u8; 32];
@@ -610,13 +699,28 @@ pub fn client_finish(
         if !shared.was_contributory() {
             return Err("invalid server static key");
         }
-        es.extend_from_slice(shared.as_bytes());
+        extra.extend_from_slice(shared.as_bytes());
         server_key = Some(s);
     } else if pinned.is_some() {
         return Err("server did not authenticate but a key is pinned");
     }
+    let mut client_identity = None;
+    if caps & CAP_CLIENT_AUTH != 0 {
+        // Offered (checked above), so the hello carries our key.
+        let Some(id) = identity.filter(|id| client_hello.get(42..74) == Some(&id.public()[..]))
+        else {
+            return Err("server selected client identity but the identity key is missing");
+        };
+        let shared = id.secret.diffie_hellman(&PublicKey::from(e_s));
+        if !shared.was_contributory() {
+            return Err("invalid server key share");
+        }
+        extra.extend_from_slice(shared.as_bytes());
+        client_identity = Some(id.public());
+    }
     let body = &server_hello[..want - 16];
-    let keys = derive(client_hello, body, ee.as_bytes(), &es);
+    let mut keys = derive(client_hello, body, ee.as_bytes(), &extra);
+    keys.client_identity = client_identity;
     // Constant-time comparison: every byte is examined whatever the result.
     let diff = confirm_tag(&keys)
         .iter()
@@ -632,6 +736,7 @@ pub fn client_finish(
 /// [`OpenSecClientHandshake::RESEND_MS`] until answered or timed out.
 pub struct OpenSecClientHandshake {
     ephemeral: StaticSecret,
+    identity: Option<IdentityKey>,
     hello: Vec<u8>,
     pinned: Option<[u8; 32]>,
     started: Option<u64>,
@@ -657,6 +762,7 @@ impl OpenSecClientHandshake {
         let hello = client_hello(PublicKey::from(&ephemeral).as_bytes(), CAP_SERVER_AUTH);
         Self {
             ephemeral,
+            identity: None,
             hello,
             pinned,
             started: None,
@@ -670,6 +776,18 @@ impl OpenSecClientHandshake {
         self.timeout_ms = ms;
         self
     }
+
+    /// Offers `identity` to the server (`CAP_CLIENT_AUTH`), for servers that
+    /// tie bans or accounts to a key. The public key travels in the clear.
+    pub fn with_identity(mut self, identity: IdentityKey) -> Self {
+        self.hello = client_hello_with_identity(
+            PublicKey::from(&self.ephemeral).as_bytes(),
+            CAP_SERVER_AUTH,
+            Some(&identity.public()),
+        );
+        self.identity = Some(identity);
+        self
+    }
 }
 
 impl Handshake for OpenSecClientHandshake {
@@ -680,7 +798,13 @@ impl Handshake for OpenSecClientHandshake {
             }
             return Step::Pending;
         }
-        match client_finish(&self.hello, &self.ephemeral, data, self.pinned.as_ref()) {
+        match client_finish_with_identity(
+            &self.hello,
+            &self.ephemeral,
+            data,
+            self.pinned.as_ref(),
+            self.identity.as_ref(),
+        ) {
             Ok((keys, server_key)) => {
                 Step::Established(Box::new(OpenSecCipher::new(&keys, false, server_key)))
             }
@@ -848,6 +972,87 @@ mod tests {
     }
 
     #[test]
+    fn client_identity_is_reported_only_after_a_record_proves_it() {
+        let server_key = ServerKey::generate(&fixed(1));
+        let identity = IdentityKey::generate(&fixed(5));
+        let acc = OpenSecAcceptor::new(Some(server_key.clone()), fixed(2)).with_client_identities();
+        let mut hs = OpenSecClientHandshake::new(&fixed(3), None).with_identity(identity.clone());
+        let mut out = Vec::new();
+        hs.poll(0, &mut out);
+        let mut replies = Vec::new();
+        let Some(Accept::Established(mut server)) = acc.accept(0, &out[0], &mut replies) else {
+            panic!("server should accept");
+        };
+        let Step::Established(mut client) = hs.on_datagram(0, &replies[0], &mut out) else {
+            panic!("client should finish");
+        };
+        assert_eq!(client.peer_key(), Some(server_key.public()));
+        // The hello only claims the key.
+        assert_eq!(server.peer_key(), None);
+        let mut login = vec![0x09, 1, 2, 3];
+        client.encrypt(&mut login);
+        assert!(server.decrypt(&mut login));
+        assert_eq!(server.peer_key(), Some(identity.public()));
+    }
+
+    #[test]
+    fn a_copied_identity_never_proves_itself() {
+        let victim = IdentityKey::generate(&fixed(5));
+        let thief = IdentityKey::generate(&fixed(6));
+        let ce = random_secret(&fixed(3));
+        let se = random_secret(&fixed(2));
+        // The thief sends the victim's public key...
+        let hello = client_hello_with_identity(
+            PublicKey::from(&ce).as_bytes(),
+            CAP_SERVER_AUTH,
+            Some(&victim.public()),
+        );
+        let (sh, keys) =
+            server_respond(&hello, &se, None, CAP_SERVER_AUTH | CAP_CLIENT_AUTH).unwrap();
+        assert_eq!(keys.client_identity, Some(victim.public()));
+        // ... but can't compute X25519(victim, Es): its own key, or none, gives
+        // different keys, and the client side refuses to pretend.
+        assert!(client_finish_with_identity(&hello, &ce, &sh, None, Some(&thief)).is_err());
+        let ee = ce.diffie_hellman(&PublicKey::from(&se));
+        let wrong = thief.secret.diffie_hellman(&PublicKey::from(&se));
+        let mut guessed = derive(
+            &hello,
+            &sh[..sh.len() - 16],
+            ee.as_bytes(),
+            wrong.as_bytes(),
+        );
+        guessed.client_identity = None;
+        let mut thief_side = OpenSecCipher::new(&guessed, false, None);
+        let mut server = OpenSecCipher::new(&keys, true, keys.client_identity);
+        for _ in 0..5 {
+            let mut d = vec![0x09, 0, 0];
+            thief_side.encrypt(&mut d);
+            assert!(!server.decrypt(&mut d));
+        }
+        assert_eq!(server.peer_key(), None);
+    }
+
+    #[test]
+    fn identities_are_ignored_by_servers_that_dont_want_them() {
+        let identity = IdentityKey::generate(&fixed(5));
+        let acc = OpenSecAcceptor::new(None, fixed(2));
+        let mut hs = OpenSecClientHandshake::new(&fixed(3), None).with_identity(identity);
+        let mut out = Vec::new();
+        hs.poll(0, &mut out);
+        let mut replies = Vec::new();
+        let Some(Accept::Established(mut server)) = acc.accept(0, &out[0], &mut replies) else {
+            panic!("server should accept");
+        };
+        let Step::Established(mut client) = hs.on_datagram(0, &replies[0], &mut out) else {
+            panic!("client should finish");
+        };
+        let mut d = vec![0x09, 1];
+        client.encrypt(&mut d);
+        assert!(server.decrypt(&mut d));
+        assert_eq!(server.peer_key(), None);
+    }
+
+    #[test]
     fn tampered_server_hello_fails() {
         let acc = OpenSecAcceptor::new(Some(ServerKey::generate(&fixed(4))), fixed(2));
         let mut hs = OpenSecClientHandshake::new(&fixed(3), None);
@@ -943,7 +1148,9 @@ mod tests {
              # nonce <c2s|s2c> <counter, decimal> <12-byte AEAD nonce>\n\
              # record <c2s|s2c> <counter, decimal> <plaintext> <encrypted datagram>\n\
              #\n\
-             # reject-client-hello <name> <client hello>: a server must not answer it\n\
+             # server_caps: the capabilities the server is configured with (u16, written most significant byte first)\n\
+             # client_identity_*: the client's long-term identity key (CLIENT_AUTH); se: X25519(client identity, Es)\n\
+             # reject-client-hello <name> <server caps> <client hello>: a server with those capabilities must not answer it\n\
              # reject-server-hello <name> <client ephemeral secret> <client hello> <pinned key or -> <server hello>:\n\
              #   a client must fail the handshake\n\
              # window <name> <step>...: one receiver from a fresh session, fed records in order. Each step is\n\
@@ -951,22 +1158,52 @@ mod tests {
              #   ! marks a record whose tag fails, which must change nothing.\n",
         );
         let pubkey = |s: &StaticSecret| PublicKey::from(s).to_bytes();
-        for (name, auth) in [("anonymous", false), ("server-auth", true)] {
+        // (name, server has a static key, client has an identity, server
+        // accepts identities)
+        for (name, auth, has_id, wants_id) in [
+            ("anonymous", false, false, false),
+            ("server-auth", true, false, false),
+            ("client-auth", true, true, true),
+            ("client-auth-anonymous-server", false, true, true),
+            ("identity-not-wanted", true, true, false),
+        ] {
             let ce = StaticSecret::from(secret(0x10));
             let se = StaticSecret::from(secret(0x40));
             let ss = auth.then(|| ServerKey::from_secret(secret(0x70)));
-            let hello = client_hello(&pubkey(&ce), CAP_SERVER_AUTH);
-            let (sh, keys) = server_respond(&hello, &se, ss.as_ref(), CAP_SERVER_AUTH).unwrap();
-            let (ck, _) =
-                client_finish(&hello, &ce, &sh, ss.as_ref().map(|k| k.public()).as_ref()).unwrap();
+            let ci = has_id.then(|| IdentityKey::from_secret(secret(0xD0)));
+            let server_caps = CAP_SERVER_AUTH | if wants_id { CAP_CLIENT_AUTH } else { 0 };
+            let hello = client_hello_with_identity(
+                &pubkey(&ce),
+                CAP_SERVER_AUTH,
+                ci.as_ref().map(|k| k.public()).as_ref(),
+            );
+            let (sh, keys) = server_respond(&hello, &se, ss.as_ref(), server_caps).unwrap();
+            let (ck, _) = client_finish_with_identity(
+                &hello,
+                &ce,
+                &sh,
+                ss.as_ref().map(|k| k.public()).as_ref(),
+                ci.as_ref(),
+            )
+            .unwrap();
             assert_eq!(ck, keys);
+            assert_eq!(
+                keys.client_identity,
+                ci.as_ref().filter(|_| wants_id).map(|k| k.public())
+            );
             // Intermediate values, recomputed here from the primitives.
             let ee = ce.diffie_hellman(&PublicKey::from(pubkey(&se)));
             let es = ss
                 .as_ref()
                 .map(|k| ce.diffie_hellman(&PublicKey::from(k.public())).to_bytes());
+            let se_shared = ci.as_ref().filter(|_| wants_id).map(|k| {
+                k.secret
+                    .diffie_hellman(&PublicKey::from(pubkey(&se)))
+                    .to_bytes()
+            });
             let mut ikm = ee.to_bytes().to_vec();
             ikm.extend_from_slice(es.as_ref().map_or(&[][..], |e| &e[..]));
+            ikm.extend_from_slice(se_shared.as_ref().map_or(&[][..], |e| &e[..]));
             let mut okm = [0u8; 64];
             Hkdf::<Sha256>::new(Some(KDF_SALT), &ikm)
                 .expand(&keys.transcript, &mut okm)
@@ -975,8 +1212,13 @@ mod tests {
 
             t.push_str(&format!("case {name}\n"));
             let mut line = |k: &str, v: &[u8]| t.push_str(&format!("{k} {}\n", hex(v)));
+            line("server_caps", &server_caps.to_be_bytes());
             line("client_ephemeral_secret", &ce.to_bytes());
             line("client_ephemeral_public", &pubkey(&ce));
+            if let Some(k) = &ci {
+                line("client_identity_secret", &k.secret_bytes());
+                line("client_identity_public", &k.public());
+            }
             line("server_ephemeral_secret", &se.to_bytes());
             line("server_ephemeral_public", &pubkey(&se));
             if let Some(k) = &ss {
@@ -989,13 +1231,16 @@ mod tests {
             if let Some(es) = &es {
                 line("es", es);
             }
+            if let Some(x) = &se_shared {
+                line("se", x);
+            }
             line("transcript", &keys.transcript);
             line("okm", &okm);
             line("key_c2s", &keys.c2s);
             line("key_s2c", &keys.s2c);
             line("confirm_tag", &sh[sh.len() - 16..]);
             let mut c = OpenSecCipher::new(&keys, false, None);
-            let mut s = OpenSecCipher::new(&keys, true, None);
+            let mut s = OpenSecCipher::new(&keys, true, keys.client_identity);
             for (dir, counter, plain) in [
                 ("c2s", 1u64, vec![0x00, 0x03, 0, 0, 0, 0, 0x09, 0x00]),
                 ("c2s", 2, vec![0x06, 0x02, 0x00, 0xFF, 0xFF, b'h', b'i', 0]),
@@ -1025,10 +1270,11 @@ mod tests {
         // Client hellos a server must ignore.
         let ce = StaticSecret::from(secret(0x10));
         let good = client_hello(&pubkey(&ce), CAP_SERVER_AUTH);
-        let mut bad_hellos: Vec<(&str, Vec<u8>)> = vec![
-            ("unpadded", good[..42].to_vec()),
-            ("too-long", [&good[..], &[0]].concat()),
-            ("version-2", {
+        let both = CAP_SERVER_AUTH | CAP_CLIENT_AUTH;
+        let mut bad_hellos: Vec<(&str, u16, Vec<u8>)> = vec![
+            ("unpadded", CAP_SERVER_AUTH, good[..42].to_vec()),
+            ("too-long", CAP_SERVER_AUTH, [&good[..], &[0]].concat()),
+            ("version-2", CAP_SERVER_AUTH, {
                 let mut h = good.clone();
                 h[6] = 2;
                 h
@@ -1046,16 +1292,28 @@ mod tests {
                     .unwrap(),
             ),
         ] {
-            bad_hellos.push((n, client_hello(&point, CAP_SERVER_AUTH)));
+            bad_hellos.push((n, CAP_SERVER_AUTH, client_hello(&point, CAP_SERVER_AUTH)));
         }
+        // A low-order identity key, to a server that accepts identities.
+        let low_id: [u8; 32] = core::array::from_fn(|i| (i == 0) as u8);
+        bad_hellos.push((
+            "low-order-identity",
+            both,
+            client_hello_with_identity(&pubkey(&ce), CAP_SERVER_AUTH, Some(&low_id)),
+        ));
         let se = StaticSecret::from(secret(0x40));
-        for (n, h) in &bad_hellos {
-            assert!(
-                server_respond(h, &se, None, CAP_SERVER_AUTH).is_none(),
-                "{n}"
-            );
-            t.push_str(&format!("reject-client-hello {n} {}\n", hex(h)));
+        for (n, caps, h) in &bad_hellos {
+            assert!(server_respond(h, &se, None, *caps).is_none(), "{n}");
+            t.push_str(&format!(
+                "reject-client-hello {n} {} {}\n",
+                hex(&caps.to_be_bytes()),
+                hex(h)
+            ));
         }
+        // ... which the same server accepts from a client with a real key.
+        let id = IdentityKey::from_secret(secret(0xD0));
+        let with_id = client_hello_with_identity(&pubkey(&ce), CAP_SERVER_AUTH, Some(&id.public()));
+        assert!(server_respond(&with_id, &se, None, both).is_some());
 
         // Server hellos a client must reject. Some are built with a valid
         // confirmation tag, so that only the rule under test fails.
@@ -1105,7 +1363,12 @@ mod tests {
             (
                 "unoffered-capability",
                 None,
-                forge(0x0002, pubkey(&se), None, &[]),
+                forge(0x0004, pubkey(&se), None, &[]),
+            ),
+            (
+                "unoffered-client-auth",
+                None,
+                forge(CAP_CLIENT_AUTH, pubkey(&se), None, &[]),
             ),
             ("low-order-ephemeral", None, forge(0, low_one, None, &[])),
             (

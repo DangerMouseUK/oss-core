@@ -36,6 +36,7 @@ fn records(data: &[u8]) {
         transcript: [1; 32],
         c2s: [2; 32],
         s2c: [3; 32],
+        client_identity: None,
     };
     let mut sender = OpenSecCipher::new(&keys, false, None);
     let mut receiver = OpenSecCipher::new(&keys, true, None);

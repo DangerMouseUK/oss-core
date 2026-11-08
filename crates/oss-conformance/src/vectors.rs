@@ -370,6 +370,14 @@ fn opensec(v: &mut Vec<Case>) {
                     let ce = get(&fields, "client_ephemeral_secret");
                     let se = get(&fields, "server_ephemeral_secret");
                     let ss = get(&fields, "server_static_secret");
+                    let ci = get(&fields, "client_identity_secret");
+                    // Optional trailing identity argument, only when there is one.
+                    let id_arg = if ci == "-" {
+                        String::new()
+                    } else {
+                        format!(" {ci}")
+                    };
+                    let server_caps = get(&fields, "server_caps");
                     let ch = get(&fields, "client_hello");
                     let sh = get(&fields, "server_hello");
                     let caps = unhex(&ch)
@@ -378,19 +386,19 @@ fn opensec(v: &mut Vec<Case>) {
                     v.push(exact(
                         "opensec.handshake",
                         format!("{case}-client-hello"),
-                        format!("opensec.client_hello {ce} {caps:04x}"),
+                        format!("opensec.client_hello {ce} {caps:04x}{id_arg}"),
                         ch.clone(),
                     ));
                     v.push(exact(
                         "opensec.handshake",
                         format!("{case}-server-hello"),
-                        format!("opensec.server_hello {se} {ss} {caps:04x} {ch}"),
+                        format!("opensec.server_hello {se} {ss} {server_caps} {ch}"),
                         sh.clone(),
                     ));
                     v.push(exact(
                         "opensec.handshake",
                         format!("{case}-client-keys"),
-                        format!("opensec.client_keys {ce} {ch} {sh}"),
+                        format!("opensec.client_keys {ce} {ch} {sh}{id_arg}"),
                         format!("{} {}", get(&fields, "key_c2s"), get(&fields, "key_s2c")),
                     ));
                 }

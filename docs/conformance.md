@@ -56,9 +56,9 @@ A minimal adapter can therefore answer `unsupported` to everything and add comma
 | `settings.locate <Section:Key>` | every location of the key in the settings packet, as `bitoffset:bitlength`, space-separated | 1,692 keys from 2 configurations, reference server |
 | `checksum.crc32 <bytes>` | CRC-32 (the S2C `0x29` map checksum) | 4 maps |
 | `checksum.map <key> <.lvl file>` | security map checksum | 4 seeded synthetic maps, 132 keys, reference server |
-| `opensec.client_hello <ephemeral secret> <caps>` | client hello | OpenSec |
+| `opensec.client_hello <ephemeral secret> <caps> [identity secret]` | client hello (with the identity key and `CLIENT_AUTH` if given) | OpenSec |
 | `opensec.server_hello <ephemeral secret> <static secret or -> <caps> <client hello>` | server hello | OpenSec |
-| `opensec.client_keys <ephemeral secret> <client hello> <server hello>` | `<c2s key> <s2c key>` | OpenSec |
+| `opensec.client_keys <ephemeral secret> <client hello> <server hello> [identity secret]` | `<c2s key> <s2c key>` | OpenSec |
 | `opensec.seal <key> <c2s or s2c> <counter> <plaintext>` | record | OpenSec |
 | `opensec.open <key> <c2s or s2c> <counter> <record>` | plaintext, or `error` if tampered | OpenSec |
 | `packet.roundtrip <s2c, c2s or core> <packet>` | the packet decoded and encoded again | 68 S2C, 37 C2S and 16 core canonical encodings (every length form of the packets whose form is chosen by length), plus the 2 reference settings packets |

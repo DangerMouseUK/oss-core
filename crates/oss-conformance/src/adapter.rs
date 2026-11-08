@@ -12,7 +12,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use oss_formats::Level;
 use oss_net::VieCipher;
-use oss_net::opensec::{self, Direction, PublicKey, ServerKey, StaticSecret};
+use oss_net::opensec::{self, Direction, IdentityKey, PublicKey, ServerKey, StaticSecret};
 use oss_net::relay::Frame;
 use oss_proto::checksum::{crc32, map_checksum, settings_checksum, vie_exe_checksum};
 use oss_proto::{C2SPacket, C2SPosition, CorePacket, Packet, S2CPacket, S2CWeapon};
@@ -227,10 +227,18 @@ fn answer(a: &[&str]) -> Option<String> {
             }
             found.join(" ")
         }
-        ["opensec.client_hello", secret, caps] => {
+        ["opensec.client_hello", secret, caps, identity @ ..] if identity.len() <= 1 => {
             let s = StaticSecret::from(key32(secret)?);
             let caps = u16::from_str_radix(caps, 16).ok()?;
-            hex(&opensec::client_hello(PublicKey::from(&s).as_bytes(), caps))
+            let identity = match identity.first() {
+                Some(i) => Some(IdentityKey::from_secret(key32(i)?).public()),
+                None => None,
+            };
+            hex(&opensec::client_hello_with_identity(
+                PublicKey::from(&s).as_bytes(),
+                caps,
+                identity.as_ref(),
+            ))
         }
         ["opensec.server_hello", eph, stat, caps, client_hello] => {
             let eph = StaticSecret::from(key32(eph)?);
@@ -243,11 +251,26 @@ fn answer(a: &[&str]) -> Option<String> {
                 opensec::server_respond(&unhex(client_hello)?, &eph, stat.as_ref(), caps)?;
             hex(&hello)
         }
-        ["opensec.client_keys", eph, client_hello, server_hello] => {
+        [
+            "opensec.client_keys",
+            eph,
+            client_hello,
+            server_hello,
+            identity @ ..,
+        ] if identity.len() <= 1 => {
             let eph = StaticSecret::from(key32(eph)?);
-            let (keys, _) =
-                opensec::client_finish(&unhex(client_hello)?, &eph, &unhex(server_hello)?, None)
-                    .ok()?;
+            let identity = match identity.first() {
+                Some(i) => Some(IdentityKey::from_secret(key32(i)?)),
+                None => None,
+            };
+            let (keys, _) = opensec::client_finish_with_identity(
+                &unhex(client_hello)?,
+                &eph,
+                &unhex(server_hello)?,
+                None,
+                identity.as_ref(),
+            )
+            .ok()?;
             format!("{} {}", hex(&keys.c2s), hex(&keys.s2c))
         }
         ["opensec.seal", key, d, counter, plain] => hex(&opensec::seal_record(

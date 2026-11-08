@@ -186,6 +186,7 @@ def self_test():
 MAGIC = b"OSEC"
 VERSION = 1
 SERVER_AUTH = 0x0001
+CLIENT_AUTH = 0x0002
 CLIENT_HELLO_LEN = 90
 SALT = b"OpenSec v1 handshake"
 C2S, S2C = 1, 2
@@ -200,10 +201,15 @@ def nonce(direction: int, counter: int) -> bytes:
     return struct.pack("<IQ", direction, counter)
 
 
-def client_hello(ec_public: bytes, caps: int) -> bytes:
-    return (b"\x00\x01" + MAGIC + bytes([VERSION, 0]) + struct.pack("<H", caps) + ec_public).ljust(
-        CLIENT_HELLO_LEN, b"\x00"
-    )
+def client_hello(ec_public: bytes, caps: int, identity_public=None) -> bytes:
+    if identity_public is None:
+        caps &= ~CLIENT_AUTH
+        tail = b""
+    else:
+        caps |= CLIENT_AUTH
+        tail = identity_public
+    head = b"\x00\x01" + MAGIC + bytes([VERSION, 0]) + struct.pack("<H", caps) + ec_public
+    return (head + tail).ljust(CLIENT_HELLO_LEN, b"\x00")
 
 
 def derive(ch: bytes, sh_body: bytes, ee: bytes, es: bytes):
@@ -221,21 +227,26 @@ def server_respond(ch: bytes, es_secret: bytes, static_secret, server_caps: int)
         raise Reject("version")
     client_caps = struct.unpack("<H", ch[8:10])[0]
     ec = ch[10:42]
-    caps = client_caps & server_caps
+    caps = client_caps & server_caps & (SERVER_AUTH | CLIENT_AUTH)
     caps = caps | SERVER_AUTH if static_secret else caps & ~SERVER_AUTH
     ee = x25519(es_secret, ec)
     if ee == ZERO32:
         raise Reject("low-order client key")
+    se = b""
+    if caps & CLIENT_AUTH:
+        se = x25519(es_secret, ch[42:74])
+        if se == ZERO32:
+            raise Reject("low-order client identity")
     body = b"\x00\x02" + MAGIC + bytes([VERSION, 0]) + struct.pack("<H", caps) + public_key(es_secret)
     es = b""
     if static_secret:
         body += public_key(static_secret)
         es = x25519(static_secret, ec)
-    _, _, tag = derive(ch, body, ee, es)
+    _, _, tag = derive(ch, body, ee, es + se)
     return body + tag
 
 
-def client_finish(ch: bytes, ec_secret: bytes, sh: bytes, pinned):
+def client_finish(ch: bytes, ec_secret: bytes, sh: bytes, pinned, identity_secret=None):
     """The client's checks; returns (key_c2s, key_s2c, server key) or raises Reject."""
     if len(sh) < 58 or sh[:2] != b"\x00\x02" or sh[2:6] != MAGIC:
         raise Reject("not a server hello")
@@ -261,7 +272,14 @@ def client_finish(ch: bytes, ec_secret: bytes, sh: bytes, pinned):
             raise Reject("low-order server static key")
     elif pinned is not None:
         raise Reject("pinned but anonymous")
-    _, okm, tag = derive(ch, sh[:-16], ee, es)
+    se = b""
+    if caps & CLIENT_AUTH:
+        if identity_secret is None or public_key(identity_secret) != ch[42:74]:
+            raise Reject("identity selected but not held")
+        se = x25519(identity_secret, sh[10:42])
+        if se == ZERO32:
+            raise Reject("low-order server ephemeral key")
+    _, okm, tag = derive(ch, sh[:-16], ee, es + se)
     if not hmac.compare_digest(tag, sh[-16:]):
         raise Reject("confirmation tag")
     return okm[:32], okm[32:], server_key
@@ -317,25 +335,32 @@ def check(path: Path):
             return
         ce, se = h(case["client_ephemeral_secret"]), h(case["server_ephemeral_secret"])
         ss = h(case["server_static_secret"]) if "server_static_secret" in case else None
+        ci = h(case["client_identity_secret"]) if "client_identity_secret" in case else None
+        server_caps = int(case["server_caps"], 16)
         assert public_key(ce).hex() == case["client_ephemeral_public"]
         assert public_key(se).hex() == case["server_ephemeral_public"]
         if ss:
             assert public_key(ss).hex() == case["server_static_public"]
-        ch = client_hello(public_key(ce), SERVER_AUTH)
+        if ci:
+            assert public_key(ci).hex() == case["client_identity_public"]
+        ch = client_hello(public_key(ce), SERVER_AUTH, public_key(ci) if ci else None)
         assert ch.hex() == case["client_hello"], "client hello"
-        sh = server_respond(ch, se, ss, SERVER_AUTH)
+        sh = server_respond(ch, se, ss, server_caps)
         assert sh.hex() == case["server_hello"], "server hello"
         ee = x25519(ce, public_key(se))
         assert ee.hex() == case["ee"]
         es = x25519(ce, public_key(ss)) if ss else b""
         assert es.hex() == case.get("es", "")
-        transcript, okm, tag = derive(ch, sh[:-16], ee, es)
+        selected = struct.unpack("<H", sh[8:10])[0]
+        se_shared = x25519(ci, public_key(se)) if selected & CLIENT_AUTH else b""
+        assert se_shared.hex() == case.get("se", "")
+        transcript, okm, tag = derive(ch, sh[:-16], ee, es + se_shared)
         assert transcript.hex() == case["transcript"]
         assert okm.hex() == case["okm"]
         assert (okm[:32].hex(), okm[32:].hex()) == (case["key_c2s"], case["key_s2c"])
         assert tag.hex() == case["confirm_tag"]
         pin = public_key(ss) if ss else None
-        assert client_finish(ch, ce, sh, pin)[:2] == (okm[:32], okm[32:])
+        assert client_finish(ch, ce, sh, pin, ci)[:2] == (okm[:32], okm[32:])
         for direction, counter, plain, wire in case["records"]:
             key, d = (okm[:32], C2S) if direction == "c2s" else (okm[32:], S2C)
             assert seal_record(key, d, counter, plain) == wire, f"record {direction} {counter}"
@@ -367,7 +392,7 @@ def check(path: Path):
         elif kind == "reject-client-hello":
             finish_case()
             try:
-                server_respond(h(f[2]), h("40" * 32), None, SERVER_AUTH)
+                server_respond(h(f[3]), h("40" * 32), None, int(f[2], 16))
             except Reject:
                 count("rejected client hello")
             else:
