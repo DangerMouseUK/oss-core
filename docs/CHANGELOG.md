@@ -4,6 +4,9 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (settings layout)
+- New `settings::layout() -> Vec<SettingLocation>` (`name`, `bit_offset`, `bit_len`): every named setting and its place in the settings packet. It is checked against the reference server's layout, and the conformance suite now uses it. A game simulation can use it to list the settings it does and doesn't read, mechanically (prompted by PRIVATE review L3).
+
 ### Docs (review fixes)
 - `directory.md` now spells out the two sockets. The registration socket sends from any port (the reference binds port 0) and must not be bound to game port + 1. The ping socket listens on game port + 1, where the directory pings the registered port at the sender's address. The directory conformance check already followed this rule. (PRIVATE review C1.)
 - `checksums.md`: the map checksum now names the original key `k` and a separate running sum (`sum += k XOR tile`), so the running sum can't be XORed by mistake. (PRIVATE review C2.)

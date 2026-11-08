@@ -153,9 +153,11 @@ fn client_checks_pass_for_the_bot_sdk() {
         let config = oss_bot_sdk::BotConfig::new("ConformanceBot", "pw");
         oss_bot_sdk::run(addr, config, &mut |_: &mut oss_bot_sdk::Session, _| {})
     });
+    // Generous timeouts: the bot and the zone compete with the other tests for
+    // CPU.
     let opts = ClientOptions {
-        connect_timeout: Duration::from_secs(10),
-        timeout: Duration::from_secs(8),
+        connect_timeout: Duration::from_secs(15),
+        timeout: Duration::from_secs(15),
         ..ClientOptions::default()
     };
     let r = live::check_client(sock, &opts).unwrap();

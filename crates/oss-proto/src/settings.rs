@@ -865,3 +865,88 @@ mod tests {
         assert_eq!(BYTE_KEYS[24], "Misc:AntiWarpSettleDelay");
     }
 }
+
+/// Where one named setting lives in the settings packet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingLocation {
+    /// `Section:Key`, as in a zone's configuration (per-ship settings use the
+    /// ship's name as the section, e.g. `Warbird:MaximumSpeed`).
+    pub name: alloc::string::String,
+    /// Offset in bits from the start of the packet (type byte included).
+    pub bit_offset: u32,
+    /// Width in bits.
+    pub bit_len: u32,
+}
+
+/// Every named setting and its place in the 1428-byte packet, built from this
+/// module's key tables. A few names occupy more than one place and are listed
+/// once per place. Useful to check which settings a game simulation reads, or
+/// to build a packet from a configuration file. Checked against the reference
+/// server's own layout in `tests/reference_vectors.rs`.
+pub fn layout() -> Vec<SettingLocation> {
+    use alloc::format;
+    use alloc::string::ToString;
+    let mut v = Vec::new();
+    let mut add = |name: alloc::string::String, bit_offset: u32, bit_len: u32| {
+        v.push(SettingLocation {
+            name,
+            bit_offset,
+            bit_len,
+        })
+    };
+    for (key, lo, w) in ARENA_BITS {
+        add(key.to_string(), lo, w);
+    }
+    // The reference server names two arena bits after its own override keys.
+    add("Misc:DisableBallThroughWalls".into(), 19, 1);
+    add("Misc:DisableBallKilling".into(), 20, 1);
+    for (s, ship) in SHIP_NAMES.iter().enumerate() {
+        let base = 32 + s as u32 * 144 * 8;
+        for (i, k) in SHIP_LONG_KEYS.iter().enumerate() {
+            add(format!("{ship}:{k}"), base + i as u32 * 32, 32);
+        }
+        for (i, k) in SHIP_SHORT_KEYS.iter().enumerate() {
+            let k = if k.is_empty() {
+                "___MiscBitfield___"
+            } else {
+                k
+            };
+            add(format!("{ship}:{k}"), base + 64 + i as u32 * 16, 16);
+        }
+        let misc = base + 64 + 10 * 16;
+        for (k, lo, w) in SHIP_MISC_BITS {
+            add(format!("{ship}:{k}"), misc + lo, w);
+        }
+        for (i, k) in SHIP_BYTE_KEYS.iter().enumerate() {
+            add(format!("{ship}:{k}"), base + 64 + 49 * 16 + i as u32 * 8, 8);
+        }
+        let weapons = base + 64 + 49 * 16 + 18 * 8;
+        for (k, lo, w) in SHIP_WEAPON_BITS {
+            add(format!("{ship}:{k}"), weapons + lo, w);
+        }
+        add(format!("{ship}:Unused1"), weapons + 29, 3);
+    }
+    let longs = 32 + 8 * 144 * 8;
+    for (i, k) in LONG_KEYS.iter().enumerate() {
+        add(k.to_string(), longs + i as u32 * 32, 32);
+    }
+    let spawns = longs + 20 * 32;
+    for t in 0..4u32 {
+        for (name, lo, w) in [("X", 0, 10), ("Y", 10, 10), ("Radius", 20, 9)] {
+            add(format!("Spawn:Team{t}-{name}"), spawns + t * 32 + lo, w);
+        }
+    }
+    let shorts = spawns + 4 * 32;
+    for (i, k) in SHORT_KEYS.iter().enumerate() {
+        add(k.to_string(), shorts + i as u32 * 16, 16);
+    }
+    let bytes = shorts + 58 * 16;
+    for (i, k) in BYTE_KEYS.iter().enumerate() {
+        add(k.to_string(), bytes + i as u32 * 8, 8);
+    }
+    let weights = bytes + 32 * 8;
+    for (i, k) in PRIZE_WEIGHT_KEYS.iter().enumerate() {
+        add(k.to_string(), weights + i as u32 * 8, 8);
+    }
+    v
+}

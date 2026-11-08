@@ -15,10 +15,6 @@ use oss_net::VieCipher;
 use oss_net::opensec::{self, Direction, PublicKey, ServerKey, StaticSecret};
 use oss_net::relay::Frame;
 use oss_proto::checksum::{crc32, map_checksum, settings_checksum, vie_exe_checksum};
-use oss_proto::settings::{
-    ARENA_BITS, BYTE_KEYS, LONG_KEYS, PRIZE_WEIGHT_KEYS, SHIP_BYTE_KEYS, SHIP_LONG_KEYS,
-    SHIP_MISC_BITS, SHIP_NAMES, SHIP_SHORT_KEYS, SHIP_WEAPON_BITS, SHORT_KEYS,
-};
 use oss_proto::{C2SPacket, C2SPosition, CorePacket, Packet, S2CPacket, S2CWeapon};
 
 use crate::report::{Report, Status};
@@ -162,65 +158,12 @@ fn dir(s: &str) -> Option<Direction> {
     }
 }
 
-/// Bit locations (`offset:length`) of every named setting in the 1428-byte
-/// settings packet. Several names have more than one location.
+/// Bit locations of every named setting (from `oss_proto::settings::layout`).
 pub fn settings_layout() -> Vec<(String, u32, u32)> {
-    let mut v = Vec::new();
-    for (key, lo, w) in ARENA_BITS {
-        v.push((key.to_string(), lo, w));
-    }
-    // The reference server names two arena bits after its own override keys.
-    v.push(("Misc:DisableBallThroughWalls".into(), 19, 1));
-    v.push(("Misc:DisableBallKilling".into(), 20, 1));
-    for (s, ship) in SHIP_NAMES.iter().enumerate() {
-        let base = 32 + s as u32 * 144 * 8;
-        for (i, k) in SHIP_LONG_KEYS.iter().enumerate() {
-            v.push((format!("{ship}:{k}"), base + i as u32 * 32, 32));
-        }
-        for (i, k) in SHIP_SHORT_KEYS.iter().enumerate() {
-            let k = if k.is_empty() {
-                "___MiscBitfield___"
-            } else {
-                k
-            };
-            v.push((format!("{ship}:{k}"), base + 64 + i as u32 * 16, 16));
-        }
-        let misc = base + 64 + 10 * 16;
-        for (k, lo, w) in SHIP_MISC_BITS {
-            v.push((format!("{ship}:{k}"), misc + lo, w));
-        }
-        for (i, k) in SHIP_BYTE_KEYS.iter().enumerate() {
-            v.push((format!("{ship}:{k}"), base + 64 + 49 * 16 + i as u32 * 8, 8));
-        }
-        let weapons = base + 64 + 49 * 16 + 18 * 8;
-        for (k, lo, w) in SHIP_WEAPON_BITS {
-            v.push((format!("{ship}:{k}"), weapons + lo, w));
-        }
-        v.push((format!("{ship}:Unused1"), weapons + 29, 3));
-    }
-    let longs = 32 + 8 * 144 * 8;
-    for (i, k) in LONG_KEYS.iter().enumerate() {
-        v.push((k.to_string(), longs + i as u32 * 32, 32));
-    }
-    let spawns = longs + 20 * 32;
-    for t in 0..4u32 {
-        for (name, lo, w) in [("X", 0, 10), ("Y", 10, 10), ("Radius", 20, 9)] {
-            v.push((format!("Spawn:Team{t}-{name}"), spawns + t * 32 + lo, w));
-        }
-    }
-    let shorts = spawns + 4 * 32;
-    for (i, k) in SHORT_KEYS.iter().enumerate() {
-        v.push((k.to_string(), shorts + i as u32 * 16, 16));
-    }
-    let bytes = shorts + 58 * 16;
-    for (i, k) in BYTE_KEYS.iter().enumerate() {
-        v.push((k.to_string(), bytes + i as u32 * 8, 8));
-    }
-    let weights = bytes + 32 * 8;
-    for (i, k) in PRIZE_WEIGHT_KEYS.iter().enumerate() {
-        v.push((k.to_string(), weights + i as u32 * 8, 8));
-    }
-    v
+    oss_proto::settings::layout()
+        .into_iter()
+        .map(|l| (l.name, l.bit_offset, l.bit_len))
+        .collect()
 }
 
 /// The reference answer to one request line.

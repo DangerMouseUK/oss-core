@@ -925,7 +925,20 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
         C2SPacket::ContLogin(l) => Some(l.0.clone()),
         _ => None,
     });
-    r.check(G, "login", got_login, "no C2S 0x09/0x24 login");
+    let stats = z
+        .server
+        .connection(&peer)
+        .map(|c| c.stats())
+        .unwrap_or_default();
+    r.check(
+        G,
+        "login",
+        got_login,
+        format!(
+            "no C2S 0x09/0x24 login ({} datagrams received from the client, {} sent to it, {} retransmitted, {} dropped as invalid)",
+            stats.datagrams_received, stats.datagrams_sent, stats.retransmits, stats.dropped
+        ),
+    );
     let Some(login) = login else {
         return Ok(r);
     };
