@@ -4,18 +4,14 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 
 | Read | Client code | Server only | Not yet | Not settings |
 |---|---|---|---|---|
-| 175 | 18 | 8 | 28 | 9 |
+| 175 | 23 | 8 | 23 | 9 |
 
 ## Not used yet
 
 | Setting | Why it matters |
 |---|---|
-| `Bomb:JitterTime` | screen shake when a bomb hits you (cosmetic) |
 | `Chat:MessageReliable` | chat is always sent reliably |
-| `Flag:EnterGameFlaggingDelay` | new players wait before seeing/taking flags |
-| `Flag:FlagBlankDelay` | hide flags after no server data |
 | `Flag:FlagDropResetReward` | a kill reward that resets the flag drop timer |
-| `Flag:NoDataFlagDropDelay` | drop flags after no server data |
 | `Latency:ClientSlowPacketSampleSize` | client lag reports (C2S 0x00) aren't sent yet |
 | `Latency:ClientSlowPacketTime` | client lag reports (C2S 0x00) aren't sent yet |
 | `Latency:S2CNoDataKickoutDelay` | the transport's own timeout is used |
@@ -27,12 +23,11 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Misc:ExtraPositionData` | whether other (non-staff) players receive your extra position data (energy, items, timers); mostly the receive side |
 | `Misc:FrequencyShift` | meaning not confirmed |
 | `Misc:MaxTimerDrift` | timer drift check (anti-cheat) |
-| `Misc:NearDeathLevel` | low-energy warning |
+| `Misc:NearDeathLevel` | energy at which a ship has a near death and loses 1 bounty (duelling zones); a sim rule, not a warning |
 | `Misc:SafetyLimit` | ticks a ship may spend in a safe zone |
 | `Misc:SlowFrameCheck` | frame-rate check (anti-cheat) |
 | `Misc:TickerDelay` | ticker text scrolling |
 | `Misc:VictoryMusic` | victory music |
-| `Radar:MapZoomFactor` | radar zoom is fixed at 10 |
 | `Radar:RadarMode` | radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates |
 | `Radar:RadarNeutralSize` | neutral zone on the radar |
 | `Ship:DamageFactor` | how likely a hit makes the ship lose a prize: 0 = never, 1 = very likely, 5000 = almost never (higher is safer; not a damage multiplier) |
@@ -64,6 +59,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Bomb:BombSafety` | `bomb_safety` |
 | `Bomb:EBombDamagePercent` | `ebomb_damage_percent` |
 | `Bomb:EBombShutdownTime` | `ebomb_shutdown_time` |
+| `Bomb:JitterTime` | `jitter_time()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Bomb:ProximityDistance` | `proximity_distance` |
 | `Brick:BrickTime` | `brick_time` |
 | `Bullet:BulletAliveTime` | `bullet_alive_time` |
@@ -74,6 +70,8 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Door:DoorDelay` | `door_delay` |
 | `Door:DoorMode` | `door_mode` |
 | `Flag:CarryFlags` | `carry_flags()` in `crates/oss-client/src/game/sandbox.rs` |
+| `Flag:EnterGameFlaggingDelay` | `enter_game_flagging_delay()` in `crates/oss-client/src/game/sandbox.rs` |
+| `Flag:FlagBlankDelay` | `flag_blank_delay()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Flag:FlagDropDelay` | `flag_drop_delay()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Flag:FlaggerBombFireDelay` | `flagger_bomb_fire_delay` |
 | `Flag:FlaggerBombUpgrade` | `flagger_bomb_upgrade` |
@@ -84,6 +82,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Flag:FlaggerOnRadar` | `flagger_on_radar` |
 | `Flag:FlaggerSpeedAdjustment` | `flagger_speed_adjustment` |
 | `Flag:FlaggerThrustAdjustment` | `flagger_thrust_adjustment` |
+| `Flag:NoDataFlagDropDelay` | `no_data_flag_drop_delay()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Kill:BountyIncreaseForKill` | `bounty_increase_for_kill` |
 | `Kill:EnterDelay` | `enter_delay` |
 | `Mine:MineAliveTime` | `mine_alive_time` |
@@ -136,6 +135,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `PrizeWeight:TopSpeed` | `prize_weights` |
 | `PrizeWeight:Warp` | `prize_weights` |
 | `PrizeWeight:XRadar` | `prize_weights` |
+| `Radar:MapZoomFactor` | `map_zoom_factor()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Repel:RepelDistance` | `repel_distance` |
 | `Repel:RepelSpeed` | `repel_speed` |
 | `Repel:RepelTime` | `repel_time` |

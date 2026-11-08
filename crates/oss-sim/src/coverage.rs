@@ -36,7 +36,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("Bomb:EBombShutdownTime", Use::Read("ebomb_shutdown_time")),
     (
         "Bomb:JitterTime",
-        Use::NotYet("screen shake when a bomb hits you (cosmetic)"),
+        Use::Client("crates/oss-client/src/game/sandbox.rs", "jitter_time()"),
     ),
     ("Bomb:ProximityDistance", Use::Read("proximity_distance")),
     ("Brick:BrickTime", Use::Read("brick_time")),
@@ -60,11 +60,17 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ),
     (
         "Flag:EnterGameFlaggingDelay",
-        Use::NotYet("new players wait before seeing/taking flags"),
+        Use::Client(
+            "crates/oss-client/src/game/sandbox.rs",
+            "enter_game_flagging_delay()",
+        ),
     ),
     (
         "Flag:FlagBlankDelay",
-        Use::NotYet("hide flags after no server data"),
+        Use::Client(
+            "crates/oss-client/src/game/sandbox.rs",
+            "flag_blank_delay()",
+        ),
     ),
     (
         "Flag:FlagDropDelay",
@@ -103,7 +109,10 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ),
     (
         "Flag:NoDataFlagDropDelay",
-        Use::NotYet("drop flags after no server data"),
+        Use::Client(
+            "crates/oss-client/src/game/sandbox.rs",
+            "no_data_flag_drop_delay()",
+        ),
     ),
     (
         "Kill:BountyIncreaseForKill",
@@ -178,7 +187,12 @@ pub const COVERAGE: &[(&str, Use)] = &[
         "Misc:MaxTimerDrift",
         Use::NotYet("timer drift check (anti-cheat)"),
     ),
-    ("Misc:NearDeathLevel", Use::NotYet("low-energy warning")),
+    (
+        "Misc:NearDeathLevel",
+        Use::NotYet(
+            "energy at which a ship has a near death and loses 1 bounty (duelling zones); a sim rule, not a warning",
+        ),
+    ),
     (
         "Misc:SafetyLimit",
         Use::NotYet("ticks a ship may spend in a safe zone"),
@@ -246,7 +260,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("PrizeWeight:XRadar", Use::Read("prize_weights")),
     (
         "Radar:MapZoomFactor",
-        Use::NotYet("radar zoom is fixed at 10"),
+        Use::Client("crates/oss-client/src/game/sandbox.rs", "map_zoom_factor()"),
     ),
     (
         "Radar:RadarMode",
