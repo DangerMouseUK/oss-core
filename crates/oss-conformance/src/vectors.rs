@@ -36,6 +36,11 @@ pub const FILES: &[(&str, &str)] = &[
     ("opensec.txt", include_str!("../vectors/opensec.txt")),
     ("packets.txt", include_str!("../vectors/packets.txt")),
     ("relay.txt", include_str!("../vectors/relay.txt")),
+    ("directory.txt", include_str!("../vectors/directory.txt")),
+    (
+        "billing-ssc.txt",
+        include_str!("../vectors/billing-ssc.txt"),
+    ),
 ];
 
 /// Embedded map files used by the map checksum vectors.
@@ -142,8 +147,36 @@ pub fn cases() -> Vec<Case> {
     maps(&mut v, "map-checksum-synthetic.txt");
     opensec(&mut v);
     packets(&mut v);
+    directory_and_billing(&mut v);
     relay(&mut v);
     v
+}
+
+fn directory_and_billing(v: &mut Vec<Case>) {
+    for (i, f) in records(file("directory.txt")).enumerate() {
+        if let ["update", _len, p] = f.as_slice() {
+            v.push(exact(
+                "packet.directory",
+                format!("update-{i}"),
+                format!("packet.roundtrip directory {p}"),
+                *p,
+            ));
+        }
+    }
+    for f in records(file("billing-ssc.txt")) {
+        if let [dir @ ("s2b" | "b2s"), name, _len, p] = f.as_slice() {
+            v.push(exact(
+                if *dir == "s2b" {
+                    "packet.billing-s2b"
+                } else {
+                    "packet.billing-b2s"
+                },
+                (*name).to_owned(),
+                format!("packet.roundtrip {dir} {p}"),
+                *p,
+            ));
+        }
+    }
 }
 
 fn vie(v: &mut Vec<Case>) {

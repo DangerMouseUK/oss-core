@@ -780,7 +780,7 @@ fn server_to_biller() -> impl Strategy<Value = ServerToBiller> {
         user_login().prop_map(S::UserLogin),
         (
             (u(), any::<u16>(), any::<u16>(), any::<u16>()),
-            (any::<u16>(), any::<u16>(), score())
+            (any::<u16>(), any::<u16>(), option::of(score()))
         )
             .prop_map(
                 |((connection_id, reason, latency, ping), (loss_s2c, loss_c2s, score))| {

@@ -6,7 +6,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 
 | Part | Command | What it checks |
 |---|---|---|
-| Vectors | `oss-conformance vectors -- <your adapter>` | 3,725 offline checks from published test vectors |
+| Vectors | `oss-conformance vectors -- <your adapter>` | 3,744 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
 | Live client | `oss-conformance client --bind ADDR` | a client that connects to the suite, which acts as a zone |
 
@@ -58,6 +58,8 @@ A minimal adapter can therefore answer `unsupported` to everything and add comma
 | `opensec.seal <key> <c2s or s2c> <counter> <plaintext>` | record | OpenSec |
 | `opensec.open <key> <c2s or s2c> <counter> <record>` | plaintext, or `error` if tampered | OpenSec |
 | `packet.roundtrip <s2c, c2s or core> <packet>` | the packet decoded and encoded again | 63 S2C, 37 C2S and 16 core canonical encodings, plus the 2 reference settings packets |
+| `packet.roundtrip <s2b or b2s> <packet>` | a billing packet decoded and encoded again | 12 packets as the reference server sends them, short forms included |
+| `packet.roundtrip directory <packet>` | a zone registration decoded and encoded again | 7 packets the reference server built |
 | `relay.frame <frame>` | the frame decoded and encoded again, or `error` | 13 relay frames |
 
 **`packet.roundtrip`.** This tests the codec end to end: decoding must accept the packet, and encoding the decoded value must give back exactly the same bytes. An implementation that only reads packets can still pass by echoing the input for packets it accepts and answering `error` for ones it rejects. That still shows it accepts every canonical form.
@@ -126,7 +128,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 
 | Implementation | Vectors | Live |
 |---|---|---|
-| oss-core (reference adapter, in process and as a child process) | 3,725 pass | — |
+| oss-core (reference adapter, in process and as a child process) | 3,744 pass | — |
 | `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 14 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
 | `oss-server` (bundled default zone, 2026-11-08) | — | 21 pass, 1 skipped: it sent no security request within 2 s |

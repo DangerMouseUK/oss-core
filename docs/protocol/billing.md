@@ -16,7 +16,7 @@ Text fields are NUL-terminated and run to the end of the packet; senders keep th
 | 02 | server connect | `u32 server id, u32 group id, u32 score id, name[126], u16 port, password[32]` (173 bytes total) |
 | 03 | server disconnect | — |
 | 04 | user login | `u8 make new, ip[4], name[32], password[32], u32 connection id, u32 machine id, i16 timezone, u16 timezone high, u8 unknown, u8 sysop, u16 client version`, then client data to the end (the 64-byte Continuum id, or nothing) |
-| 05 | user logoff | `u32 connection id, u16 reason, u16 latency, u16 ping, u16 loss S2C, u16 loss C2S`, score |
+| 05 | user logoff | `u32 connection id, u16 reason, u16 latency, u16 ping, u16 loss S2C, u16 loss C2S`, then a score only if the zone has one saved: 29 bytes with it, 15 without |
 | 06 | remote zone message | `u32 connection id, u32 server id, u8 type, u8 sound`, text |
 | 07 | remote private | `u32 connection id (often 0xFFFFFFFF), u32 group id, u8 type, u8 sound`, text in the form `:name:(from)>msg` or `:#squad:(from)>msg` |
 | 08 | request file | file name, NUL-terminated |

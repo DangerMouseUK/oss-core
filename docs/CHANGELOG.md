@@ -4,6 +4,15 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (breaking: billing)
+- `ServerToBiller::UserLogoff::score` is now `Option<PlayerScore>`. The reference server leaves the score out when it has none saved, which gives a 15-byte packet. The decoder used to reject that form; it now reads `None`, and encoding `None` writes the short form.
+  - Senders: use `score: Some(..)` or `None` instead of truncating the bytes.
+  - Billers: decode the 15-byte form instead of dropping it.
+- Directory and SSC billing packets are now checked against reference-server vectors (`tests/billing_directory_vectors.rs`):
+  - 7 zone registrations and 12 billing packets round-trip byte for byte;
+  - every field of all 17 billing structs sits at the reference offset and size.
+- `oss-conformance` runs them too (`packet.roundtrip s2b|b2s|directory`), for 3,744 vector checks in total.
+
 ### oss-net (OpenSec speed)
 - At 500 players OpenSec now costs 5.3% of a core instead of 11.5% (336 instead of 738 ns per packet). The cause was the x86 backend choice of the `poly1305` dependency: its run-time AVX2 path is about three times slower than its portable backend for game-sized records. The portable backend is selected with `--cfg poly1305_backend="soft"`.
 - This repository now sets that flag on x86 in `.cargo/config.toml`. Servers built from other repositories must set it themselves, or build with `-C target-cpu=x86-64-v3`.

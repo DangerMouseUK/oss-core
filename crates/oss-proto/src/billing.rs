@@ -164,8 +164,9 @@ pub enum ServerToBiller {
         loss_s2c: u16,
         /// Client-to-server packet loss.
         loss_c2s: u16,
-        /// Final score.
-        score: PlayerScore,
+        /// Final score; `None` when the zone has no saved score (the packet then
+        /// ends after the loss counters, 15 bytes).
+        score: Option<PlayerScore>,
     },
     /// `0x06`: a message for another zone.
     RemoteZoneMessage {
@@ -406,7 +407,12 @@ impl ServerToBiller {
                 ping: r.u16()?,
                 loss_s2c: r.u16()?,
                 loss_c2s: r.u16()?,
-                score: PlayerScore::read(&mut r)?,
+                // The reference server omits the score when it has none saved.
+                score: if r.remaining() == 0 {
+                    None
+                } else {
+                    Some(PlayerScore::read(&mut r)?)
+                },
             },
             0x06 => Self::RemoteZoneMessage {
                 connection_id: r.u32()?,
@@ -518,7 +524,9 @@ impl ServerToBiller {
                 for v in [*reason, *latency, *ping, *loss_s2c, *loss_c2s] {
                     out.put_u16(v);
                 }
-                score.write(out);
+                if let Some(score) = score {
+                    score.write(out);
+                }
             }
             Self::RemoteZoneMessage {
                 connection_id,
@@ -875,7 +883,16 @@ mod tests {
                 ping: 4,
                 loss_s2c: 5,
                 loss_c2s: 6,
-                score,
+                score: Some(score),
+            },
+            ServerToBiller::UserLogoff {
+                connection_id: 1,
+                reason: 2,
+                latency: 3,
+                ping: 4,
+                loss_s2c: 5,
+                loss_c2s: 6,
+                score: None,
             },
             ServerToBiller::RemoteZoneMessage {
                 connection_id: 1,

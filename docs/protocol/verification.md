@@ -75,8 +75,11 @@ All S2C and C2S packets round-trip in oss-core's tests and in the conformance ve
 
 | Item | Level | Notes |
 |---|---|---|
-| Zone registration, ping/pong, zone list | Sources | ASSS's directory client, the dirserver source (which also gives the acceptance rules), and the directory protocol write-up |
-| All server ↔ biller packets | Sources | ASSS's billing client and packet definitions, Subspace Server .NET, and the billing protocol write-up. Biller identity (`0x33`) has two sizes in sources, so it is read to the end of the packet |
+| Zone registration (zone → directory) | **Vectors** | 7 update packets the reference server built over names, passwords, ports, populations and a virtual server: decode and re-encode byte for byte |
+| Ping/pong, zone list (directory ↔ client) | Sources | ASSS's directory client, the dirserver source (which also gives the acceptance rules), and the directory protocol write-up |
+| SSC billing struct layouts | **Vectors** | `sizeof` and every field offset of all 17 reference structs. Each field of a packet we build sits at the reference offset and size |
+| Billing packets as the reference sends them | **Vectors** | 12 packets, including the short forms: login without client data (86 bytes), logoff without a score (15), and failed biller login (178). They decode and re-encode byte for byte. The vectors found that we rejected the 15-byte logoff; fixed |
+| Billing packets the reference server only receives or never uses (`0x06`, `0x08`, `0x0E`, `0x0F`, `0x12`; B2S `0x02`, `0x04`, `0x05`, `0x32`, `0x33`) | Sources | Subspace Server .NET and the billing protocol write-up. Biller identity (`0x33`) has two sizes in sources, so it is read to the end of the packet |
 
 ## Project protocols
 

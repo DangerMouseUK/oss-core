@@ -325,6 +325,24 @@ fn answer(a: &[&str]) -> Option<String> {
             let b = unhex(p)?;
             hex(&CorePacket::decode(&b).ok()?.to_bytes())
         }
+        ["packet.roundtrip", "s2b", p] => {
+            hex(&oss_proto::billing::ServerToBiller::decode(&unhex(p)?)
+                .ok()
+                .filter(|p| !matches!(p, oss_proto::billing::ServerToBiller::Unknown { .. }))?
+                .to_bytes())
+        }
+        ["packet.roundtrip", "b2s", p] => {
+            hex(&oss_proto::billing::BillerToServer::decode(&unhex(p)?)
+                .ok()
+                .filter(|p| !matches!(p, oss_proto::billing::BillerToServer::Unknown { .. }))?
+                .to_bytes())
+        }
+        ["packet.roundtrip", "directory", p] => {
+            let u = oss_proto::directory::ZoneUpdate::decode(&unhex(p)?).ok()?;
+            let mut out = Vec::new();
+            u.encode(&mut out);
+            hex(&out)
+        }
         ["relay.frame", p] => {
             let b = unhex(p)?;
             let f = Frame::decode(&b).ok()?;

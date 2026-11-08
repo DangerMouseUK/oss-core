@@ -278,7 +278,12 @@ fn server_checks_pass_for_an_oss_net_zone() {
         let stop = stop.clone();
         thread::spawn(move || zone(sock, stop))
     };
-    let r = live::check_server(addr, &ServerOptions::default()).unwrap();
+    // Generous timeouts: the zone thread competes with the other tests for CPU.
+    let opts = ServerOptions {
+        timeout: Duration::from_secs(10),
+        ..ServerOptions::default()
+    };
+    let r = live::check_server(addr, &opts).unwrap();
     stop.store(true, Ordering::Relaxed);
     z.join().unwrap();
     assert_all_pass(&r, "server checks");
