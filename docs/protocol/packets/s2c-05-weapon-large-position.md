@@ -9,7 +9,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Length | 21, 23 or 31 bytes |
 | oss-proto | `position::S2CWeapon` |
 | Evidence | **Vectors** |
-| Conformance | 41 vectors in [`oss-conformance`](../../conformance.md) |
+| Conformance | 43 vectors in [`oss-conformance`](../../conformance.md) |
 
 ## Layout
 

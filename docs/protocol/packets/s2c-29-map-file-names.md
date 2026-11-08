@@ -9,7 +9,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Length | 21, or 1 + 24 × n bytes |
 | oss-proto | `s2c::MapFilename` |
 | Evidence | **Sources** |
-| Conformance | 2 vectors in [`oss-conformance`](../../conformance.md) |
+| Conformance | 3 vectors in [`oss-conformance`](../../conformance.md) |
 
 ## Layout
 

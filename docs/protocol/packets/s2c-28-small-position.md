@@ -9,7 +9,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Length | 16, 18 or 26 bytes |
 | oss-proto | `position::S2CPosition` |
 | Evidence | **Sources** |
-| Conformance | 1 vector in [`oss-conformance`](../../conformance.md) |
+| Conformance | 3 vectors in [`oss-conformance`](../../conformance.md) |
 
 ## Layout
 

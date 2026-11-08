@@ -4,6 +4,16 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-conformance (wider)
+- The packet vectors now include every length form of the packets whose form is chosen by length. New: S2C `0x05` at 21 and 31 bytes, `0x28` at 16 and 18, and the one-entry 25-byte `0x29`, which must not be read as the 21-byte form. 3,749 vector checks.
+- New live server checks:
+  - `connect-repeat`: a repeated `00 01` is answered again with the same key;
+  - `sync-clock`: the server time in `00 06` advances correctly;
+  - `reliable-out-of-order-acked` and `reliable-order`: reliables arriving out of order are acknowledged and delivered in order;
+  - `unknown-core-ignored`: `00 0D` and `00 0F` don't disturb the session.
+- New live client check `arena-acks`: every reliable of the arena entry and the map transfer is acknowledged.
+- `oss-server` passes all 26 applicable server checks; `oss-bot-sdk` passes all 15 client checks.
+
 ### Docs (per-packet pages)
 - `docs/protocol/packets/` holds one page per implemented packet (135): 57 S2C, 32 C2S, 13 transport, 17 zone → biller, 12 biller → zone and 4 directory.
   - Each page gives the byte layout with offsets, the length, the oss-proto type, notes, the evidence level (23 vectors, 100 sources, 12 partly inferred) and how many conformance vectors exercise it.

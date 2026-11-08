@@ -6,7 +6,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 
 | Part | Command | What it checks |
 |---|---|---|
-| Vectors | `oss-conformance vectors -- <your adapter>` | 3,744 offline checks from published test vectors |
+| Vectors | `oss-conformance vectors -- <your adapter>` | 3,749 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
 | Live client | `oss-conformance client --bind ADDR` | a client that connects to the suite, which acts as a zone |
 
@@ -57,7 +57,7 @@ A minimal adapter can therefore answer `unsupported` to everything and add comma
 | `opensec.client_keys <ephemeral secret> <client hello> <server hello>` | `<c2s key> <s2c key>` | OpenSec |
 | `opensec.seal <key> <c2s or s2c> <counter> <plaintext>` | record | OpenSec |
 | `opensec.open <key> <c2s or s2c> <counter> <record>` | plaintext, or `error` if tampered | OpenSec |
-| `packet.roundtrip <s2c, c2s or core> <packet>` | the packet decoded and encoded again | 63 S2C, 37 C2S and 16 core canonical encodings, plus the 2 reference settings packets |
+| `packet.roundtrip <s2c, c2s or core> <packet>` | the packet decoded and encoded again | 68 S2C, 37 C2S and 16 core canonical encodings (every length form of the packets whose form is chosen by length), plus the 2 reference settings packets |
 | `packet.roundtrip <s2b or b2s> <packet>` | a billing packet decoded and encoded again | 12 packets as the reference server sends them, short forms included |
 | `packet.roundtrip directory <packet>` | a zone registration decoded and encoded again | 7 packets the reference server built |
 | `relay.frame <frame>` | the frame decoded and encoded again, or `error` | 13 relay frames |
@@ -83,13 +83,17 @@ The suite connects to the server as a SubSpace (VIE) client.
 | Check | Requirement |
 |---|---|
 | `connect` | `00 01 <key> 01 00` gets a `00 02` answer (the request is resent every second) |
+| `connect-repeat` | the same `00 01` again, before any session traffic, gets another `00 02` with the same key |
 | `connect-key` | the answer carries the VIE server key for that client key, or the client key itself (no encryption) |
 | `sync` | `00 05` gets a `00 06` echoing its time |
+| `sync-clock` | the server time in `00 06` advances by about 50 ticks over half a second |
 | `reliable-ack` | a `00 03` reliable packet is acknowledged with `00 04` and its sequence number |
 | `reliable-payload` | the packet inside the reliable is handled once |
 | `duplicate-reliable-acked` | sending the same reliable again is acknowledged again |
 | `duplicate-reliable-ignored` | and its payload is not handled a second time |
 | `cluster` | both packets inside a `00 0E` cluster are handled |
+| `reliable-out-of-order-acked`, `reliable-order` | reliables sent as sequence 2 then 1 are both acknowledged, and their payloads are handled in order 1, 2 |
+| `unknown-core-ignored` | `00 0D` and `00 0F` are ignored and the session keeps answering |
 | `disconnect` | after `00 07`, the server ignores the old session |
 
 **Session,** over a full `oss-net` connection:
@@ -116,6 +120,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `login`, `login-name` | C2S `0x09` (or `0x24`) arrives with a non-empty name |
 | `acks` | the reliable login response is acknowledged within a second |
 | `go-arena` | C2S `0x01` follows the login response |
+| `arena-acks` | every reliable of the arena entry (sent packed in clusters) and of the map transfer is acknowledged within 3 s |
 | `map-request` | C2S `0x0C` after the `0x29` map name. Skipped if the client already has the map |
 | `position`, `position-checksum` | C2S `0x03` updates arrive, all with correct checksums |
 | `security-response` | S2C `0x18` with a key gets C2S `0x1A` |
@@ -128,7 +133,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 
 | Implementation | Vectors | Live |
 |---|---|---|
-| oss-core (reference adapter, in process and as a child process) | 3,744 pass | — |
-| `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 14 pass |
+| oss-core (reference adapter, in process and as a child process) | 3,749 pass | — |
+| `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 15 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
-| `oss-server` (bundled default zone, 2026-11-08) | — | 21 pass, 1 skipped: it sent no security request within 2 s |
+| `oss-server` (bundled default zone, 2026-11-08) | — | 26 pass, 1 skipped: it sent no security request within 2 s |

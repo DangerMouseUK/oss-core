@@ -212,6 +212,22 @@ fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> i
         return Ok(());
     };
     r.pass(G, "connect");
+
+    // The same request again before any session traffic (as if the 00 02 was
+    // lost): the server must answer again, with the same key.
+    raw.sock.send(&req)?;
+    let (_, seen) = raw.collect(opts.timeout, |p| p.len() >= 6 && p[..2] == [0, 2]);
+    let again = seen
+        .iter()
+        .find(|p| p.len() >= 6 && p[..2] == [0, 2])
+        .map(|p| u32::from_le_bytes(p[2..6].try_into().unwrap()));
+    r.check(
+        G,
+        "connect-repeat",
+        again == Some(server_key),
+        format!("a repeated 00 01 got {again:08x?}, expected another 00 02 with {server_key:08x}"),
+    );
+
     if server_key == key {
         r.pass(G, "connect-key (no encryption)");
     } else {
@@ -230,6 +246,34 @@ fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> i
         raw.collect(opts.timeout, |p| is_sync_response(p, 1111))
     };
     r.check(G, "sync", ok, "no 00 06 echoing the 00 05 time");
+
+    // The server's clock in sync responses runs forward at 100 ticks a second.
+    let server_time = |raw: &Raw, t: u32| -> io::Result<Option<u32>> {
+        raw.send(sync_request(t))?;
+        let (_, seen) = raw.collect(opts.timeout, |p| is_sync_response(p, t));
+        Ok(seen.iter().find_map(|p| match CorePacket::decode(p) {
+            Ok(CorePacket::SyncResponse {
+                client_time,
+                server_time,
+            }) if client_time == t => Some(server_time),
+            _ => None,
+        }))
+    };
+    let first = server_time(&raw, 1201)?;
+    std::thread::sleep(Duration::from_millis(500));
+    let second = server_time(&raw, 1202)?;
+    match (first, second) {
+        (Some(a), Some(b)) => {
+            let d = b.wrapping_sub(a) as i32;
+            r.check(
+                G,
+                "sync-clock",
+                (25..=200).contains(&d),
+                format!("server time moved {d} ticks over 0.5 s (expected about 50)"),
+            );
+        }
+        _ => r.fail(G, "sync-clock", "no answer to a time sync request"),
+    }
 
     // A reliable packet carrying a sync request: acked, and its payload handled.
     let mut rel = vec![0, 3];
@@ -293,6 +337,56 @@ fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> i
         "cluster",
         a && b,
         "both packets in a 00 0E cluster must be handled",
+    );
+
+    // Reliables that arrive out of order are delivered in order: send sequence
+    // 2 before 1; the answer to 1's payload must come first.
+    let reliable = |seq: u32, t: u32| {
+        let mut p = vec![0, 3];
+        p.extend_from_slice(&seq.to_le_bytes());
+        p.extend_from_slice(&sync_request(t));
+        p
+    };
+    raw.send(reliable(2, 7002))?;
+    std::thread::sleep(Duration::from_millis(100));
+    raw.send(reliable(1, 7001))?;
+    let mut order = Vec::new();
+    let (mut ack1, mut ack2) = (false, false);
+    raw.collect(opts.timeout, |p| {
+        ack1 |= is_ack(p, 1);
+        ack2 |= is_ack(p, 2);
+        if is_sync_response(p, 7001) {
+            order.push(1);
+        }
+        if is_sync_response(p, 7002) {
+            order.push(2);
+        }
+        ack1 && ack2 && order.len() >= 2
+    });
+    r.check(
+        G,
+        "reliable-out-of-order-acked",
+        ack1 && ack2,
+        "both reliables must be acknowledged",
+    );
+    r.check(
+        G,
+        "reliable-order",
+        order == [1, 2],
+        format!("payloads handled in the order {order:?}, expected [1, 2]"),
+    );
+
+    // Core packets the server does not use (00 0D, 00 0F) are ignored; the
+    // session carries on.
+    raw.send(vec![0, 0x0D])?;
+    raw.send(vec![0, 0x0F, 1, 2, 3])?;
+    raw.send(sync_request(8888))?;
+    let (ok, _) = raw.collect(opts.timeout, |p| is_sync_response(p, 8888));
+    r.check(
+        G,
+        "unknown-core-ignored",
+        ok,
+        "the session stopped answering after 00 0D / 00 0F",
     );
 
     // Disconnect: the session ends and later packets are ignored.
@@ -852,6 +946,28 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
     } else {
         r.skip(G, "map-request", "no C2S 0x0C (map cached?)");
     }
+
+    // Everything sent so far (the arena burst, packed into clusters, and the
+    // map transfer) must be acknowledged.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while z
+        .server
+        .connection(&peer)
+        .is_some_and(|c| c.queued_reliable() > 0)
+        && Instant::now() < deadline
+    {
+        z.pump(Duration::from_millis(50), |_| false);
+    }
+    let left = z
+        .server
+        .connection(&peer)
+        .map_or(0, |c| c.queued_reliable());
+    r.check(
+        G,
+        "arena-acks",
+        left == 0,
+        format!("{left} reliable packets still unacknowledged after 3 s"),
+    );
 
     // Position updates with valid checksums.
     let got = z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::Position(_)));

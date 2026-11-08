@@ -8,7 +8,7 @@ Shared building blocks for Open SubSpace, an open-source, modern client and serv
 | `oss-net` | Sans-IO transport: reliable layer, clustering, file transfer, ciphers (VIE, OpenSec) |
 | `oss-formats` | `.lvl` maps, eLVL metadata, `.lvz` archives, `.ossr` replays |
 | `oss-bot-sdk` | Zone bots in a few lines: login, arena, players, chat, kills (example: `examples/greeter.rs`) |
-| `oss-conformance` | Conformance suite for any implementation: 3,744 vector checks via a language-neutral adapter, plus live client and server checks (`docs/conformance.md`) |
+| `oss-conformance` | Conformance suite for any implementation: 3,749 vector checks via a language-neutral adapter, plus live client and server checks (`docs/conformance.md`) |
 
 `docs/protocol` is the project's protocol reference, written as we implement it. `fuzz/` holds cargo-fuzz targets for every decoder and the transport.
 

@@ -81,6 +81,26 @@ fn s2c_samples() -> Vec<S2CPacket> {
             ..Default::default()
         }
         .into(),
+        // The other two lengths (21 and 31 bytes).
+        S2CWeapon {
+            player_id: 300,
+            x: 8000,
+            y: 8100,
+            ..Default::default()
+        }
+        .into(),
+        S2CWeapon {
+            player_id: 4,
+            bounty: 1000,
+            tail: PositionTail::Extra(ExtraPositionData {
+                energy: 1200,
+                s2c_ping: 7,
+                timer: 0,
+                items: 0x0101_0101,
+            }),
+            ..Default::default()
+        }
+        .into(),
         s2c::Kill {
             green: 2,
             killer: 1,
@@ -228,10 +248,31 @@ fn s2c_samples() -> Vec<S2CPacket> {
             ..Default::default()
         }
         .into(),
+        // The other two lengths (16 and 18 bytes).
+        S2CPosition {
+            player_id: 10,
+            x: 4000,
+            y: 4100,
+            ..Default::default()
+        }
+        .into(),
+        S2CPosition {
+            player_id: 11,
+            tail: PositionTail::Energy(900),
+            ..Default::default()
+        }
+        .into(),
         s2c::MapFilename::Single {
             name: "map.lvl".into(),
             checksum: 0x1234,
         }
+        .into(),
+        // One entry (25 bytes) must not be mistaken for the 21-byte form.
+        s2c::MapFilename::Files(vec![s2c::MapFile {
+            name: "map.lvl".into(),
+            checksum: 3,
+            size: 300,
+        }])
         .into(),
         s2c::MapFilename::Files(vec![
             s2c::MapFile {
