@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>oss-net browser relay</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #fff; color: #111; }
+    #status { font-family: ui-monospace, monospace; padding: 1rem; border: 1px solid #ccc; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>oss-net in the browser</h1>
+  <p>oss-net compiled to WebAssembly, connecting through the <code>oss-relay.1</code> WebSocket relay to an echo zone (<code>cargo run -p oss-net --example relay_echo</code>). Add <code>?relay=ws://host:port</code> to use another relay.</p>
+  <div id="status">loading…</div>
+  <script type="module">
+    import init from './pkg/browser.js';
+    init();
+  </script>
+</body>
+</html>

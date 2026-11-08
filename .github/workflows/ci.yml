@@ -47,6 +47,8 @@ jobs:
       # Browser builds: every crate with default features, and oss-net bare.
       - run: cargo build --target wasm32-unknown-unknown -p oss-proto -p oss-formats -p oss-net
       - run: cargo build --target wasm32-unknown-unknown -p oss-net --no-default-features
+      # The browser example: oss-net in wasm, connecting through the WebSocket relay.
+      - run: cargo build --target wasm32-unknown-unknown -p oss-net --example browser
       - run: cargo clippy --target wasm32-unknown-unknown -p oss-proto -p oss-formats -p oss-net -- -D warnings
 
   # The fuzz crate is outside the workspace; only check that its targets still

@@ -114,3 +114,25 @@ The relay forwards datagrams byte for byte, so whatever encryption the client an
   - `StreamDecoder` and `write_stream_frame`, for byte streams.
 
   It does no I/O. A browser client wraps `Connection::poll_transmit` output in `Frame::Datagram`, and feeds incoming `Frame::Datagram` payloads to `Connection::handle_datagram`.
+
+## Trying it
+
+`oss-net` carries a working pair:
+
+- **`examples/relay_echo.rs`:** a relay in front of an echo zone.
+- **`examples/browser.rs`:** `oss-net` compiled to WebAssembly, run in a browser.
+
+The browser example opens the WebSocket with the `oss-relay.1` subprotocol and sends `hello`. On `welcome` it runs a normal `Connection`: OpenSec, falling back to VIE. It then checks that 50 small packets and one 3,000-byte packet (split across datagrams) come back in order.
+
+```sh
+cargo run -p oss-net --example relay_echo -- 127.0.0.1:5700
+cargo build --release --target wasm32-unknown-unknown -p oss-net --example browser
+wasm-bindgen --target web --out-dir crates/oss-net/examples/browser/pkg     target/wasm32-unknown-unknown/release/examples/browser.wasm
+# serve crates/oss-net/examples/browser/ over HTTP, e.g.:
+python -m http.server 8765 --directory crates/oss-net/examples/browser
+# then open http://127.0.0.1:8765/index.html
+```
+
+Run on 2026-11-08 in a Chromium-based browser, the page reported `PASS: 51 packets … encryption Some(OpenSec)`. `wasm-bindgen` must match the `wasm-bindgen` version in `Cargo.lock`.
+
+`tests/relay_e2e.rs` runs the same exchange natively, through a real WebSocket on loopback, with VIE and with OpenSec, on every CI run.

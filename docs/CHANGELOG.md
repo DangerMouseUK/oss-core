@@ -4,6 +4,15 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (WebSocket relay, end to end)
+- `tests/relay_e2e.rs` runs a client `Connection` through a real WebSocket relay to an `oss-net` `Server`, over loopback, with VIE and with OpenSec. It checks the subprotocol, the hello and welcome frames, 50 echoed packets and one big packet split across datagrams.
+- New examples:
+  - `relay_echo`: a WebSocket relay in front of an echo zone;
+  - `browser`: `oss-net` compiled to WebAssembly with `web-sys`, connecting through the relay.
+
+  Run in a real browser, the browser example completed an OpenSec session and got all 51 packets back. CI builds the browser example for wasm32.
+- New dev-dependencies only, none added to the libraries: `tungstenite` on native targets; `wasm-bindgen`, `web-sys` and `js-sys` on wasm.
+
 ### Packaging (M7 groundwork)
 - The published crates no longer contain `smallmap.lvl`, the reference server's GPL sample map:
   - `oss-formats` excludes `tests/fixtures`, and its test skips when the fixture is absent;

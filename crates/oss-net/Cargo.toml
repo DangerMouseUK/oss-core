@@ -43,6 +43,7 @@ workspace = true
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false }
 
+
 [[bench]]
 name = "transport"
 harness = false
@@ -55,3 +56,27 @@ required-features = ["opensec"]
 
 [package.metadata.docs.rs]
 all-features = true
+
+# Runs the relay end to end with OpenSec and VIE.
+[[test]]
+name = "relay_e2e"
+required-features = ["opensec", "os-entropy"]
+
+# A real WebSocket for the relay end-to-end test and the relay_echo example.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tungstenite = "0.30"
+
+# The browser example (examples/browser.rs).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = "0.3.107"
+wasm-bindgen = "0.2.130"
+web-sys = { version = "0.3.107", features = ["BinaryType", "Document", "Element", "Location", "MessageEvent", "WebSocket", "Window", "console"] }
+
+[[example]]
+name = "relay_echo"
+required-features = ["opensec", "os-entropy"]
+
+[[example]]
+name = "browser"
+crate-type = ["cdylib"]
+required-features = ["opensec", "os-entropy"]
