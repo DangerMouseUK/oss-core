@@ -152,7 +152,7 @@ impl ObjectData {
     pub fn map_y(&self) -> i16 {
         self.y_word as i16
     }
-    /// Screen object x reference point ([`reference`]).
+    /// Screen object x reference point ([`reference`](mod@reference)).
     pub fn x_ref(&self) -> u8 {
         (self.x_word & 0xF) as u8
     }

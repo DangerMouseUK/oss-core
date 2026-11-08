@@ -5,7 +5,7 @@
 //! in wire order; integers as 8 or 4 hex digits, most significant first).
 //! Answer `error` when the input must be rejected and `unsupported` for commands
 //! the implementation does not provide; those checks are skipped. The commands
-//! are listed in `docs/conformance.md` and implemented by [`reference`].
+//! are listed in `docs/conformance.md` and implemented by [`reference()`].
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
