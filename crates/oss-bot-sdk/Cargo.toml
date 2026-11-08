@@ -1,0 +1,22 @@
+[package]
+name = "oss-bot-sdk"
+description = "Write SubSpace/Continuum zone bots in a few lines: connect, log in, enter an arena, react to players, chat and kills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/oss-bot-sdk"
+readme = "README.md"
+keywords = ["subspace", "continuum", "bot", "gamedev", "sdk"]
+categories = ["game-development", "network-programming"]
+
+[dependencies]
+miniz_oxide = "0.8"
+oss-formats.workspace = true
+oss-net.workspace = true
+oss-proto.workspace = true
+
+[lints]
+workspace = true

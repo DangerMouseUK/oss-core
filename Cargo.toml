@@ -16,6 +16,7 @@ homepage = "https://github.com/DangerMouseUK/oss-core"
 oss-proto = { path = "crates/oss-proto", version = "0.1.0" }
 oss-net = { path = "crates/oss-net", version = "0.1.0" }
 oss-formats = { path = "crates/oss-formats", version = "0.1.0" }
+oss-bot-sdk = { path = "crates/oss-bot-sdk", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

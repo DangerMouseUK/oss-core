@@ -6,9 +6,10 @@ Shared building blocks for Open SubSpace, an open-source, modern client and serv
 |-------|--------------|
 | `oss-proto` | Packet types and codecs for the game protocol |
 | `oss-net` | Sans-IO transport: reliable layer, clustering, file transfer, ciphers (VIE, OpenSec) |
-| `oss-formats` | `.lvl` maps, eLVL metadata, `.lvz` archives |
+| `oss-formats` | `.lvl` maps, eLVL metadata, `.lvz` archives, `.ossr` replays |
+| `oss-bot-sdk` | Zone bots in a few lines: login, arena, players, chat, kills (example: `examples/greeter.rs`) |
 
-`docs/protocol` is the project's protocol reference, written as we implement it.
+`docs/protocol` is the project's protocol reference, written as we implement it. `fuzz/` holds cargo-fuzz targets for every decoder and the transport.
 
 Used by [oss-server](https://github.com/DangerMouseUK/oss-server) and [oss-client](https://github.com/DangerMouseUK/oss-client), and intended for bots and tools in any language or licence.
 

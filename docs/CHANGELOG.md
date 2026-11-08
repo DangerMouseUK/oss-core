@@ -4,6 +4,25 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-bot-sdk (new crate, MIT)
+- A small layer over `oss-net` and `oss-proto` that turns a bot into one file. See the crate README and `examples/greeter.rs`, which greets players and answers `!ping`.
+- `Session` is the sans-IO core. It handles:
+  - connecting, with `Encryption::{Vie, OpenSec, OpenSecOrVie}`;
+  - logging in, creating the account if the name is new;
+  - entering an arena, then switching to the configured ship;
+  - keeping the player list (`players`, `player`, `player_by_name`);
+  - sending position updates;
+  - answering security checks (settings, exe and map checksums, downloading the map once per arena).
+- Events (`BotEvent`): `Connected`, `LoggedIn`, `LoginFailed`, `EnteredArena`, `PlayerEntered { player, initial }`, `PlayerLeft`, `Chat(ChatMessage)`, `Position`, `Kill`, `ShipChanged`, `FreqChanged`, `Packet` (anything else) and `Disconnected`.
+  - Remote private messages are parsed into a sender and the text.
+- Actions:
+  - chat: `send_public`, `send_team`, `send_private`, `send_private_to` (in-arena or remote) and `reply`;
+  - ship, team and arena: `set_ship`, `set_freq` and `go_arena`;
+  - movement: `set_position` and `send_position_now`;
+  - anything else: `send_packet` and `disconnect`.
+- `run(addr, config, &mut handler)` is a blocking UDP loop. Closures `FnMut(&mut Session, BotEvent)` work as handlers.
+- Tested against a scripted in-process zone. The greeter example was also run against the real `oss-server`: two bots logged in and entered the arena.
+
 ### oss-net (browsers)
 - All three crates build for `wasm32-unknown-unknown` with default features. On that target, `os-entropy` takes its randomness from the browser's Web Crypto API (getrandom's `wasm_js` backend), so OpenSec works in browsers without extra setup.
 - CI builds and lints the wasm target for every crate, and builds `oss-net` without features.
