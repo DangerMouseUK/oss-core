@@ -12,6 +12,8 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | **Sources** | The layout and behaviour agree with the reference server's packet definitions and code, and with at least one other independent source. The other sources are the SubSpace 1.35 client's packet handler table (types up to `0x31`), Subspace Server .NET, MervBot, nullspace, the directory and billing servers, and the billing and directory protocol write-ups. Sources were read for behaviour only. Not checked against a running reference. |
 | **Partly inferred** | The layout is confirmed by sources, but some fields' meaning is unknown or comes from a single source. Those fields are named, decoded as raw values, and preserved exactly on re-encode. |
 | **Project spec** | Defined by this project. Its vectors check our implementation against our own specification, not against an independent one. |
+| **Observed** | Seen in traffic from the original server (subgame 1.34.14), captured and analysed by the PRIVATE stream. It can't be replayed byte for byte, because the server picks fresh keys, so it backs a claim without being a test vector. |
+| **Open** | Sources disagree and nothing yet settles which is right; the page says what this project does meanwhile. |
 
 **Live tests.** Behaviour exercised against `oss-server` (`oss-conformance server`) or with `oss-bot-sdk` (`oss-conformance client`) is noted as live. Both use oss-core's codecs, so they confirm consistency, not independence.
 
@@ -24,6 +26,8 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | `00 03` reliable, `00 04` ack, duplicate handling, receive window | Sources | ASSS `net.c` plus the client handler table. Conformance (live): acks, single delivery of duplicates |
 | `00 05` / `00 06` time sync, both request lengths | Sources | live |
 | `00 07` disconnect | Sources | live |
+| Zone ping port (game port + 1) | Sources | The reference server's `net.c`, and the original server observed answering the same way. live (`oss-conformance`) |
+| Original server's answer to a VIE `00 01` | Open | The original server answers with an undocumented `00 05`; see [transport.md](transport.md#connection-setup) |
 | `00 08` / `00 09` big data, `00 0A` sized transfer, `00 0B`/`00 0C` cancel | Sources | Map downloads use them (live). The ASSS-compatible caps of 64 KiB (big) and 16 MiB (sized) are server limits, not protocol |
 | `00 0E` cluster | Sources | live |
 | `00 10`–`00 14` Continuum key expansion | Partly inferred | Only the shape is documented; the algorithm is not public, so it is not implemented here |
@@ -36,6 +40,7 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | Position checksum (C2S `0x03`, S2C `0x05`) | **Vectors** | 48 C2S packets (8 corrupted), 40 S2C |
 | Settings checksum | **Vectors** | 2 packets × 7 keys |
 | Map checksum | **Vectors** | `smallmap.lvl` and 4 synthetic maps, 165 checksums, including big objects across the map edge and negative keys |
+| Map file CRC-32 in S2C `0x29`, and the `size` field | **Vectors** and observed | The CRC-32 matches the reference server's vectors. The original server advertised the same CRC-32 for the same map to a real client. Its `size` was the length of the whole `0x2A` packet that followed, not the file size |
 | Map checksum for keys ≥ `0x80000000` | **Vectors** for ASSS | ASSS wraps coordinates mod 1024. Whether the Continuum client does the same is **unconfirmed** |
 | VIE exe checksum | **Vectors** | 32 keys (nullspace) |
 | `map_crc32` (Continuum's extra map CRC in C2S `0x1A`) | Partly inferred | From a single source; not checked against a Continuum client |
@@ -47,6 +52,7 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 |---|---|---|
 | The 1428-byte layout and every named key's bit position | **Vectors** | 846 keys × 2 configurations, read back from packets the reference server built |
 | Decode and re-encode | **Vectors** | Both reference packets re-encode byte for byte |
+| Against the original server | Observed | A settings packet a real client received from the original server (subgame 1.34.14) matches the reference server's packet for the same configuration in 1,427 of 1,428 bytes. The one difference is how `MaxTimerDrift` is encoded; see [settings.md](settings.md) |
 | Meaning of individual settings | Sources | Names follow the reference server's configuration keys. What the client does with each value is documented there, not here |
 
 ## Game packets ([game-packets.md](game-packets.md))

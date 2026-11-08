@@ -4,6 +4,23 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-conformance (ping port, directory mode)
+- New live server checks:
+  - `ping-port`: a zone answers a 4-byte ping on game port + 1 with its population and the echo;
+  - `ping-population`: once the suite's player is in an arena, the population counts it (allowing for the reference server's cache).
+  - oss-server passes both: 28 pass, 1 skipped.
+- New mode `oss-conformance directory --bind ADDR`: the suite acts as a directory server and checks a zone's registration against the directory acceptance rules, then pings the zone on its game port + 1 (8 checks; `--repeat` also checks the 60 s interval). It is tested against the reference server's own registrations, including one whose long password directories would refuse.
+
+### Docs (observations of the original server)
+- `directory.md`:
+  - zones register from an ephemeral port; directories take the game port from the packet. This corrects an earlier claim that the source port mattered;
+  - new section on the zone ping port.
+- `settings.md`: the original server encodes `MaxTimerDrift` as a quantised percentage while ASSS writes it raw. That is the only byte in which the original server's settings packet differs from ASSS's for the same configuration.
+- `transport.md`: the original server's undocumented `00 05` answer to a VIE connection request is recorded as an open question.
+- `verification.md`:
+  - new levels: **Observed** (seen in the original server's traffic) and **Open**;
+  - the settings packet, the map CRC-32 and the `0x29` size field are now backed by observations of the original server.
+
 ### oss-net (OpenSec backend)
 - New optional feature `opensec-ring`: OpenSec records use ring's assembly ChaCha20-Poly1305 instead of RustCrypto's pure-Rust one.
   - It is two to three times faster per record (189 vs 325 ns for 16 bytes, 428 vs 1,084 ns for 491). At 500 players OpenSec drops from 5.3% to 4.2% of a core.

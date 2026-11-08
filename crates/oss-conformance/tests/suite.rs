@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use oss_conformance::adapter::{self, Process, Reference};
-use oss_conformance::live::{self, ClientOptions, ServerOptions};
+use oss_conformance::live::{self, ClientOptions, DirectoryOptions, ServerOptions};
 use oss_conformance::{Report, Status, vectors};
 use oss_net::{Config, Event, Server, VieAcceptor};
 use oss_proto::checksum::crc32;
@@ -167,7 +167,7 @@ fn client_checks_pass_for_the_bot_sdk() {
 
 /// A small zone: login, arena entry with the reference settings packet, map
 /// download and a security request.
-fn zone(sock: UdpSocket, stop: Arc<AtomicBool>) {
+fn zone(sock: UdpSocket, stop: Arc<AtomicBool>, population: Arc<std::sync::atomic::AtomicU32>) {
     sock.set_read_timeout(Some(Duration::from_millis(5)))
         .unwrap();
     let mut server: Server<SocketAddr> = Server::new(Config::server());
@@ -183,6 +183,7 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>) {
             server.handle_datagram(now, from, &buf[..n]);
         }
         server.tick(now);
+        population.store(server.len() as u32, Ordering::Relaxed);
         while let Some((from, e)) = server.poll_event() {
             let Event::Packet(p) = e else { continue };
             let mut reply = |p: S2CPacket| {
@@ -269,14 +270,48 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>) {
     }
 }
 
+/// Binds a game port and the ping port (game port + 1).
+fn bind_pair() -> (UdpSocket, UdpSocket) {
+    loop {
+        let game = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = game.local_addr().unwrap().port();
+        if let Ok(ping) = UdpSocket::bind(("127.0.0.1", port.wrapping_add(1))) {
+            return (game, ping);
+        }
+    }
+}
+
+/// Answers pings with the population (here, the number of connections).
+fn ping_responder(
+    sock: UdpSocket,
+    population: Arc<std::sync::atomic::AtomicU32>,
+    stop: Arc<AtomicBool>,
+) {
+    sock.set_read_timeout(Some(Duration::from_millis(20)))
+        .unwrap();
+    let mut buf = [0u8; 64];
+    while !stop.load(Ordering::Relaxed) {
+        if let Ok((4, from)) = sock.recv_from(&mut buf) {
+            let mut reply = population.load(Ordering::Relaxed).to_le_bytes().to_vec();
+            reply.extend_from_slice(&buf[..4]);
+            let _ = sock.send_to(&reply, from);
+        }
+    }
+}
+
 #[test]
 fn server_checks_pass_for_an_oss_net_zone() {
-    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (sock, ping_sock) = bind_pair();
     let addr = sock.local_addr().unwrap();
+    let population = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     let z = {
-        let stop = stop.clone();
-        thread::spawn(move || zone(sock, stop))
+        let (stop, population) = (stop.clone(), population.clone());
+        thread::spawn(move || zone(sock, stop, population))
+    };
+    let pinger = {
+        let (stop, population) = (stop.clone(), population.clone());
+        thread::spawn(move || ping_responder(ping_sock, population, stop))
     };
     // Generous timeouts: the zone thread competes with the other tests for CPU.
     let opts = ServerOptions {
@@ -286,6 +321,70 @@ fn server_checks_pass_for_an_oss_net_zone() {
     let r = live::check_server(addr, &opts).unwrap();
     stop.store(true, Ordering::Relaxed);
     z.join().unwrap();
+    pinger.join().unwrap();
     assert_all_pass(&r, "server checks");
     assert!(r.count(Status::Pass) >= 20, "{}", r.render(true, 100));
+}
+
+/// Sends reference-built registrations (with the port pointing at a ping
+/// responder) to the directory mode, including ones the rules must reject.
+#[test]
+fn directory_checks_judge_registrations() {
+    let text = vectors::FILES
+        .iter()
+        .find(|(n, _)| *n == "directory.txt")
+        .unwrap()
+        .1;
+    let packets: Vec<Vec<u8>> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("update "))
+        .map(|l| vectors::unhex(l.split_whitespace().nth(1).unwrap()).unwrap())
+        .collect();
+    let run = |mut pkt: Vec<u8>| {
+        let dir = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let dir_addr = dir.local_addr().unwrap();
+        let (game, ping_sock) = bind_pair();
+        let port = game.local_addr().unwrap().port();
+        pkt[4..6].copy_from_slice(&port.to_le_bytes());
+        let stop = Arc::new(AtomicBool::new(false));
+        let pinger = {
+            let stop = stop.clone();
+            let population = Arc::new(std::sync::atomic::AtomicU32::new(3));
+            thread::spawn(move || ping_responder(ping_sock, population, stop))
+        };
+        game.send_to(&pkt, dir_addr).unwrap();
+        let opts = DirectoryOptions {
+            wait: Duration::from_secs(5),
+            repeat: false,
+        };
+        let r = live::check_zone_registration(dir, &opts).unwrap();
+        stop.store(true, Ordering::Relaxed);
+        pinger.join().unwrap();
+        r
+    };
+    // The reference's default registration passes every check.
+    let r = run(packets[0].clone());
+    assert_all_pass(&r, "reference registration");
+    assert_eq!(r.count(Status::Pass), 8, "{}", r.render(true, 20));
+    // A long password: the reference sends it, directories reject it.
+    let long = packets
+        .iter()
+        .find(|p| p[61..94].iter().any(|&b| b != 0))
+        .expect("a vector with a long password")
+        .clone();
+    let r = run(long);
+    assert!(
+        r.outcomes
+            .iter()
+            .any(|o| o.id == "password-length" && o.status == Status::Fail)
+    );
+    // A non-zero ip field is refused.
+    let mut bad = packets[0].clone();
+    bad[0] = 1;
+    let r = run(bad);
+    assert!(
+        r.outcomes
+            .iter()
+            .any(|o| o.id == "ip-zero" && o.status == Status::Fail)
+    );
 }

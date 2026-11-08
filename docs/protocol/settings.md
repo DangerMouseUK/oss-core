@@ -26,10 +26,25 @@ The packet is 1428 bytes and little-endian throughout.
 | 11–13 | slow-frame threshold, configured as `Misc:SlowFrameCheck` |
 | 14 | `Misc:DisableScreenshot` |
 | 15 | reserved |
-| 16–18 | `Misc:MaxTimerDrift` |
+| 16–18 | `Misc:MaxTimerDrift` (encoding differs between servers; see below) |
 | 19 | `Soccer:DisableWallPass` |
 | 20 | `Soccer:DisableBallKilling` |
 | 21–31 | unused |
+
+**`MaxTimerDrift`.** Servers disagree on how this field is written:
+
+- The reference server (ASSS) writes the configured number raw, keeping its low 3 bits.
+- The original server (subgame 1.34.14) quantises a percentage:
+
+  ```
+  wire = 7                        if config < 5   (off)
+         min(config / 5 - 1, 6)   otherwise       (integer division)
+  ```
+
+  So 5 % to 35 % map to 0–6, and anything from 35 % up is capped at 6.
+- The two also have different defaults: ASSS uses 0, subgame 15.
+
+PRIVATE found this by comparing a settings packet captured from the original server with the reference server's packet for the same configuration. The two were identical in every other byte. Servers that want to match the original should use the quantised form.
 
 ## Per-ship block (144 bytes)
 

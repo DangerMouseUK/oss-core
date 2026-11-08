@@ -174,9 +174,47 @@ fn is_ack(p: &[u8], want: u32) -> bool {
 /// then login, arena entry, map download and the security exchange.
 pub fn check_server(addr: SocketAddr, opts: &ServerOptions) -> io::Result<Report> {
     let mut r = Report::default();
+    if let Some(pop) = ping(addr, opts.timeout)? {
+        r.pass("server.ping", format!("ping-port (population {pop})"));
+    } else {
+        r.fail(
+            "server.ping",
+            "ping-port",
+            format!(
+                "no 8-byte answer on port {} (game port + 1), which clients and directories ping",
+                addr.port().wrapping_add(1)
+            ),
+        );
+    }
     transport_checks(addr, opts, &mut r)?;
     session_checks(addr, opts, &mut r)?;
     Ok(r)
+}
+
+/// Pings the zone on game port + 1: 4 bytes out, 8 back (`u32` population,
+/// then the 4 bytes echoed). Returns the population.
+fn ping(addr: SocketAddr, timeout: Duration) -> io::Result<Option<u32>> {
+    let bind = if addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let sock = UdpSocket::bind(bind)?;
+    let mut target = addr;
+    target.set_port(addr.port().wrapping_add(1));
+    sock.set_read_timeout(Some(Duration::from_millis(250)))?;
+    let token = seed().to_le_bytes();
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0u8; 64];
+    while Instant::now() < deadline {
+        sock.send_to(&token, target)?;
+        while let Ok((n, from)) = sock.recv_from(&mut buf) {
+            if from == target && n == 8 && buf[4..8] == token {
+                return Ok(Some(u32::from_le_bytes(buf[..4].try_into().unwrap())));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io::Result<()> {
@@ -540,6 +578,30 @@ fn session_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io:
         optional_graphics: None,
     });
     s.pump(opts.timeout, |p| matches!(p, S2CPacket::EnteringArena(_)));
+    // The ping port now counts this player. Servers may cache the figure (the
+    // reference refreshes it at most every 2 s by default), so allow 10 s.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = None;
+    while Instant::now() < deadline {
+        last = ping(addr, opts.timeout)?;
+        if last.is_none_or(|p| p >= 1) {
+            break;
+        }
+        s.pump(Duration::from_millis(500), |_| false);
+    }
+    match last {
+        Some(pop) => r.check(
+            "server.ping",
+            "ping-population",
+            pop >= 1,
+            format!("population still {pop} 10 s after this player entered an arena"),
+        ),
+        None => r.skip(
+            "server.ping",
+            "ping-population",
+            "no answer on the ping port",
+        ),
+    }
     let pos = |f: &dyn Fn(&S2CPacket) -> bool| s.packets.iter().position(|(_, p)| f(p));
     let pid = pos(&|p| matches!(p, S2CPacket::PlayerId(_)));
     let settings = pos(&|p| matches!(p, S2CPacket::Settings(_)));
@@ -1072,6 +1134,161 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
     z.server.disconnect(&peer);
     while let Some((to, d)) = z.server.poll_transmit() {
         let _ = z.sock.send_to(&d, to);
+    }
+    Ok(r)
+}
+
+// ---- zone under test: directory registration ----------------------------------------
+
+/// Options for [`check_zone_registration`].
+#[derive(Debug, Clone)]
+pub struct DirectoryOptions {
+    /// How long to wait for the first registration.
+    pub wait: Duration,
+    /// Also wait for the next registration and check the interval (about 60 s).
+    pub repeat: bool,
+}
+
+impl Default for DirectoryOptions {
+    fn default() -> Self {
+        Self {
+            wait: Duration::from_secs(120),
+            repeat: false,
+        }
+    }
+}
+
+/// The next datagram long enough to be a registration (directory ports also
+/// receive 4-byte pings), optionally only from `from`.
+fn next_registration(
+    sock: &UdpSocket,
+    until: Instant,
+    from: Option<std::net::IpAddr>,
+) -> io::Result<Option<(Vec<u8>, SocketAddr)>> {
+    let mut buf = [0u8; 2048];
+    while Instant::now() < until {
+        match sock.recv_from(&mut buf) {
+            Ok((n, src)) if n >= 94 && from.is_none_or(|ip| ip == src.ip()) => {
+                return Ok(Some((buf[..n].to_vec(), src)));
+            }
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::ConnectionReset
+                ) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(None)
+}
+
+/// Acts as a directory server on `sock` and checks the first zone registration
+/// that arrives against the rules directory servers apply, then pings the zone
+/// on its game port + 1.
+pub fn check_zone_registration(sock: UdpSocket, opts: &DirectoryOptions) -> io::Result<Report> {
+    const G: &str = "directory";
+    let mut r = Report::default();
+    sock.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let Some((pkt, src)) = next_registration(&sock, Instant::now() + opts.wait, None)? else {
+        r.fail(G, "registration", "no registration datagram arrived");
+        return Ok(r);
+    };
+    r.pass(G, "registration");
+    let Ok(u) = oss_proto::directory::ZoneUpdate::decode(&pkt) else {
+        r.fail(
+            G,
+            "decodes",
+            format!("{} bytes do not decode as a zone registration", pkt.len()),
+        );
+        return Ok(r);
+    };
+    let printable = |b: &[u8]| b.iter().all(|&c| (0x20..0x7F).contains(&c));
+    r.check(
+        G,
+        "ip-zero",
+        u.ip == 0,
+        format!("ip field is {:#010x}; it must be 0", u.ip),
+    );
+    r.check(
+        G,
+        "version-134",
+        u.version == 134,
+        format!("version {}; directories expect 134", u.version),
+    );
+    r.check(
+        G,
+        "score-keeping",
+        u.score_keeping <= 1,
+        format!("score keeping {}; must be 0 or 1", u.score_keeping),
+    );
+    r.check(
+        G,
+        "name",
+        pkt[14..46].contains(&0) && printable(u.name.as_bytes()) && !u.name.as_bytes().is_empty(),
+        "the 32-byte name must be printable, non-empty and NUL-terminated",
+    );
+    // Directories use only the first 16 bytes of the password field.
+    r.check(
+        G,
+        "password-length",
+        pkt[61..94].iter().all(|&b| b == 0),
+        "password longer than 15 characters: directory servers reject it",
+    );
+    r.check(
+        G,
+        "description",
+        pkt.len() > 94 && pkt.last() == Some(&0) && pkt.len() <= 480,
+        format!(
+            "description must end with a NUL and the datagram stay within 480 bytes ({} bytes)",
+            pkt.len()
+        ),
+    );
+
+    // Directories ping zones on the registered game port + 1.
+    let mut target = src;
+    target.set_port(u.port.wrapping_add(1));
+    let ping = UdpSocket::bind(if src.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+    ping.set_read_timeout(Some(Duration::from_millis(250)))?;
+    let token = seed().to_le_bytes();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut answered = false;
+    let mut buf = [0u8; 64];
+    while !answered && Instant::now() < deadline {
+        ping.send_to(&token, target)?;
+        while let Ok((n, from)) = ping.recv_from(&mut buf) {
+            answered |= from == target && n == 8 && buf[4..8] == token;
+        }
+    }
+    r.check(
+        G,
+        "ping-reachable",
+        answered,
+        format!("no ping answer on {target} (the registered game port + 1)"),
+    );
+
+    if opts.repeat {
+        let start = Instant::now();
+        match next_registration(&sock, start + Duration::from_secs(90), Some(src.ip()))? {
+            Some(_) => {
+                let secs = start.elapsed().as_secs();
+                r.check(
+                    G,
+                    "repeat-interval",
+                    (40..=80).contains(&secs),
+                    format!("next registration after {secs} s; expected about 60"),
+                );
+            }
+            None => r.fail(G, "repeat-interval", "no second registration within 90 s"),
+        }
+    } else {
+        r.skip(
+            G,
+            "repeat-interval",
+            "not requested (--repeat waits for the next registration, about a minute)",
+        );
     }
     Ok(r)
 }

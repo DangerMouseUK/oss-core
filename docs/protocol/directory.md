@@ -27,7 +27,7 @@ Directory servers reject an update unless:
 - the name is printable;
 - byte 61 is 0 and bytes 62–93 are all 0. Only the first 16 bytes of the password field are used, so a password can have at most 15 characters.
 
-The datagram's source port must be the game port's neighbour as configured, because directories ping zones on port + 1. One reference server caps the description so the datagram stays at most 480 bytes.
+Directories take the game port from the packet, not from the datagram: the reference server sends its registrations from an ephemeral source port. They ping the zone on game port + 1 (see below), so that port must answer. The reference server caps the description at 385 bytes plus its NUL, so the datagram stays at most 480 bytes.
 
 ## Ping (UDP port 4991)
 
@@ -35,6 +35,16 @@ The datagram's source port must be the game port's neighbour as configured, beca
 - **Pong:** an 8-byte reply. The first `u32` is informational: one directory sends its zone count, while one document describes it as the constant 1. The second `u32` echoes the ping.
 
 Directories also ping registered zones to measure latency.
+
+## Zone ping port (game port + 1)
+
+Zones answer the same 4-byte ping on their game port + 1. The pong's first `u32` is the zone's population, then the ping's 4 bytes are echoed. Clients use it to show population and latency in their zone lists, and directories use it to reach registered zones.
+
+- The reference server counts every player on the server, and refreshes the figure at most every `Net:PingDataRefreshTime` (default 200 ticks, 2 s), so it can lag behind.
+- The original server (subgame 1.34.14) answers the same way: an empty zone reports 0 (PRIVATE's observation).
+- The reference server also accepts an 8-byte request, an extension that returns per-arena counts. oss-core does not implement it.
+
+`oss-conformance server` checks the ping port, and `oss-conformance directory` checks that a registered zone answers on it.
 
 ## Zone list (client ↔ directory, port 4990)
 

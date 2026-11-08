@@ -45,6 +45,8 @@ A repeated `00 01` from a known address is handled in one of two ways:
 
 Continuum uses extra setup steps (`00 10`, `00 11`), described in [encryption](encryption.md).
 
+**Open question.** The original server (subgame 1.34.14) answers a `00 01` with protocol 1 not with `00 02` but with `00 05 <u32 key>`, a packet no other server or client source describes. Nothing sent after it got a reply, in the clear or encrypted with any key derived from it, and its configuration's encryption settings made no difference. Until a real 1.34 client is watched connecting to it, this project follows the reference server and other sources (`00 02`). Source: PRIVATE's observations of the original server.
+
 ## Reliable delivery
 
 - Each direction has its own sequence counter. It starts at 0, increases by one per reliable datagram, and is signed (negative values are invalid).

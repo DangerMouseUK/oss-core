@@ -8,6 +8,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 |---|---|---|
 | Vectors | `oss-conformance vectors -- <your adapter>` | 3,749 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
+| Live directory | `oss-conformance directory --bind ADDR` | a zone's directory registration, with the suite acting as a directory server |
 | Live client | `oss-conformance client --bind ADDR` | a client that connects to the suite, which acts as a zone |
 
 The exit status is 0 if nothing failed, 1 if a check failed, and 2 on usage or I/O errors. `--verbose` lists every check; otherwise only failures are listed after the per-group counts.
@@ -19,6 +20,7 @@ oss-conformance vectors                            # oss-core itself (should be 
 oss-conformance vectors -- python3 my_adapter.py   # your implementation
 oss-conformance server zone.example:5000 --name Tester --password secret
 oss-conformance client --bind 0.0.0.0:5000         # then point your client at this address
+oss-conformance directory --bind 0.0.0.0:4991      # then list this address as the zone's directory server
 ```
 
 ## Vectors and the adapter protocol
@@ -78,6 +80,13 @@ Each file's header in `crates/oss-conformance/vectors/` says which. The suite em
 
 The suite connects to the server as a SubSpace (VIE) client.
 
+**Ping port:**
+
+| Check | Requirement |
+|---|---|
+| `ping-port` | a 4-byte datagram to game port + 1 gets an 8-byte answer: the population, then the 4 bytes echoed |
+| `ping-population` | once the suite's player is in an arena, the population counts it. Servers may cache the figure, so the suite allows 10 s |
+
 **Transport,** using hand-built datagrams:
 
 | Check | Requirement |
@@ -109,6 +118,22 @@ The suite connects to the server as a SubSpace (VIE) client.
 
 If the server refuses the login (for example because the name needs a password), the arena checks are skipped. Use `--name` and `--password`.
 
+## Live directory checks
+
+The suite listens as a directory server (UDP, normally port 4991) and checks the first zone registration that arrives, against the rules directory servers apply ([directory.md](protocol/directory.md)).
+
+| Check | Requirement |
+|---|---|
+| `registration`, `decodes` | a datagram of at least 94 bytes arrives and decodes as a registration |
+| `ip-zero` | the IP field is 0 |
+| `version-134` | the version is 134 |
+| `score-keeping` | 0 or 1 |
+| `name` | printable, non-empty and NUL-terminated within its 32 bytes |
+| `password-length` | at most 15 characters. Directory servers ignore the rest, and some reject longer passwords, although the reference server will send one |
+| `description` | ends with a NUL, and the datagram is at most 480 bytes |
+| `ping-reachable` | the zone answers a ping on the registered game port + 1 |
+| `repeat-interval` | with `--repeat`, the next registration arrives about 60 s later |
+
 ## Live client checks
 
 The suite listens as a zone and checks the first client that connects. It accepts VIE and OpenSec. Continuum's encryption is not public, so Continuum clients are reported as skipped.
@@ -136,4 +161,5 @@ The suite listens as a zone and checks the first client that connects. It accept
 | oss-core (reference adapter, in process and as a child process) | 3,749 pass | — |
 | `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 15 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
-| `oss-server` (bundled default zone, 2026-11-08) | — | 26 pass, 1 skipped: it sent no security request within 2 s |
+| `oss-server` (bundled default zone, 2026-11-08) | — | 28 pass, 1 skipped: it sent no security request within 2 s. Directory registration not yet implemented |
+| Registrations built by the reference server (`directory.txt`) | — | The default registration passes all 8 checks. One with a 30-character password fails `password-length`, as directory servers would refuse it |

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use oss_conformance::adapter::{self, Process, Reference};
-use oss_conformance::live::{self, ClientOptions, ServerOptions};
+use oss_conformance::live::{self, ClientOptions, DirectoryOptions, ServerOptions};
 use oss_conformance::{Report, vectors};
 
 const HELP: &str = "\
@@ -23,6 +23,9 @@ usage:
   oss-conformance client [--bind ADDR] [--wait S] [--timeout S]
       Act as a zone on ADDR (default 127.0.0.1:5000) and check the first
       client that connects.
+  oss-conformance directory [--bind ADDR] [--wait S] [--repeat]
+      Act as a directory server on ADDR (default 0.0.0.0:4991) and check the
+      first zone registration that arrives; --repeat also checks the interval.
   oss-conformance list
       List the offline check groups and counts.
 
@@ -122,6 +125,20 @@ fn run(args: &[String]) -> Result<Report, String> {
                 opts.connect_timeout.as_secs()
             );
             live::check_client(sock, &opts).map_err(|e| e.to_string())
+        }
+        Some("directory") => {
+            let bind = opt(args, "--bind").unwrap_or("0.0.0.0:4991");
+            let sock = UdpSocket::bind(bind).map_err(|e| format!("{bind}: {e}"))?;
+            let opts = DirectoryOptions {
+                wait: secs(args, "--wait", 120)?,
+                repeat: args.iter().any(|a| a == "--repeat"),
+            };
+            eprintln!(
+                "waiting for a zone registration on {} (up to {} s)...",
+                sock.local_addr().map_err(|e| e.to_string())?,
+                opts.wait.as_secs()
+            );
+            live::check_zone_registration(sock, &opts).map_err(|e| e.to_string())
         }
         Some("list") => {
             let mut groups: Vec<(&str, usize)> = Vec::new();
