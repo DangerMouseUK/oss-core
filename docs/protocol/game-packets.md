@@ -1,6 +1,6 @@
 # Game packets
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto` (`s2c`, `c2s`, `position`, `common`, `settings`, `objects`). Evidence for each part: [verification.md](verification.md).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto` (`s2c`, `c2s`, `position`, `common`, `settings`, `objects`). Evidence for each part: [verification.md](verification.md). Per-packet pages: [packets/](packets/README.md).
 
 **Conventions**
 

@@ -2,7 +2,7 @@
 
 Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
-Everything in these pages is implemented in oss-core and covered by round-trip tests. This page says how much further each part has been checked, so readers know which details are confirmed and which are reasoned from incomplete evidence.
+Everything in these pages is implemented in oss-core and covered by round-trip tests. This page says how much further each part has been checked, so readers know which details are confirmed and which are reasoned from incomplete evidence. Every packet's own page in [packets/](packets/README.md) carries its level too.
 
 ## Evidence levels
 

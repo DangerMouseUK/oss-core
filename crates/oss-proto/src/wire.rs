@@ -338,6 +338,31 @@ impl<T: Packet> Packet for alloc::boxed::Box<T> {
     }
 }
 
+/// One field of a fixed-layout packet, as listed by the packet type's `FIELDS`
+/// constant: enough to document or dissect the packet without the codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Field {
+    /// Field name in this crate.
+    pub name: &'static str,
+    /// Rust type (`u16`, `FixedStr<16>`, ...).
+    pub ty: &'static str,
+    /// Encoded size in bytes.
+    pub size: usize,
+    /// Description (the field's documentation).
+    pub doc: &'static str,
+}
+
+impl Field {
+    /// Byte offsets of `fields`, counting the type byte as offset 0.
+    pub fn offsets(fields: &[Field]) -> impl Iterator<Item = (usize, &Field)> {
+        fields.iter().scan(1, |off, f| {
+            let at = *off;
+            *off += f.size;
+            Some((at, f))
+        })
+    }
+}
+
 /// Checks the type byte and returns a reader positioned after it.
 pub fn expect_type(data: &[u8], ty: u8) -> Result<Reader<'_>, DecodeError> {
     let found = *data.first().ok_or(DecodeError::Empty)?;
@@ -360,17 +385,27 @@ macro_rules! fixed_packet {
     (
         $(#[$m:meta])*
         pub struct $name:ident = $ty:expr;
-        { $( $(#[$fm:meta])* pub $f:ident : $t:ty ),* $(,)? }
+        { $( $(#[doc = $fdoc:literal])* pub $f:ident : $t:ty ),* $(,)? }
     ) => {
         $(#[$m])*
         #[derive(Debug, Clone, PartialEq, Eq, Default)]
         pub struct $name {
-            $( $(#[$fm])* pub $f: $t, )*
+            $( $(#[doc = $fdoc])* pub $f: $t, )*
         }
 
         impl $name {
             /// Encoded length, type byte included.
             pub const LEN: usize = 1 $( + <$t as $crate::wire::Wire>::SIZE )*;
+
+            /// The fields after the type byte, in wire order.
+            pub const FIELDS: &'static [$crate::wire::Field] = &[
+                $( $crate::wire::Field {
+                    name: stringify!($f),
+                    ty: stringify!($t),
+                    size: <$t as $crate::wire::Wire>::SIZE,
+                    doc: concat!($($fdoc),*),
+                }, )*
+            ];
         }
 
         impl $crate::wire::Packet for $name {

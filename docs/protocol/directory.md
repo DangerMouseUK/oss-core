@@ -1,6 +1,6 @@
 # Directory server protocol
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::directory`. Evidence for each part: [verification.md](verification.md).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::directory`. Evidence for each part: [verification.md](verification.md). Per-packet pages: [packets/](packets/README.md).
 
 Directory servers keep a list of zones. Game servers register with them, and clients fetch the list to show a zone browser. Integers are little-endian unless stated.
 

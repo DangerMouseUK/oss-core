@@ -1,6 +1,6 @@
 # Billing server protocol
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::billing`. Evidence for each part: [verification.md](verification.md).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::billing`. Evidence for each part: [verification.md](verification.md). Per-packet pages: [packets/](packets/README.md).
 
 A *biller* is a central server that holds accounts, scores, squads and chat channels for one or more zones. A zone connects to it like a client, using the normal [transport](transport.md), and exchanges the packets below. Integers are little-endian.
 

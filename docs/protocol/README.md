@@ -12,6 +12,7 @@ A versioned, implementation-driven description of the SubSpace/Continuum network
 | [websocket-relay.md](websocket-relay.md) | `oss-relay.1`: carrying datagrams over WebSocket for browser clients |
 | [verification.md](verification.md) | what is verified against reference vectors, what comes from sources, and what is partly inferred |
 | [game-packets.md](game-packets.md) | every server-to-client and client-to-server game packet |
+| [packets/](packets/README.md) | one page per implemented packet (game, transport, billing, directory): byte layout and evidence |
 | [settings.md](settings.md) | the 1428-byte arena settings packet and its configuration keys |
 | [checksums.md](checksums.md) | file, position and security checksums; the game RNG |
 | [directory.md](directory.md) | zone registration, pings and zone lists |
