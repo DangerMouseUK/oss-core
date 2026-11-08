@@ -4,8 +4,13 @@ description = "Deterministic SubSpace ship, weapon and collision simulation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license = "MIT"
+license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/oss-sim"
+readme = "README.md"
+keywords = ["subspace", "continuum", "gamedev", "physics", "simulation"]
+categories = ["game-development", "simulation"]
 
 [dependencies]
 oss-proto.workspace = true

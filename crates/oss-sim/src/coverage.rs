@@ -509,12 +509,10 @@ mod tests {
         n
     }
 
-    /// Names in ASSS's own settings packet (oss-core's vectors), if the sibling
-    /// checkout is there.
+    /// Names in ASSS's own settings packet (oss-proto's vectors, in this
+    /// repository), if present.
     fn vector_names() -> Option<BTreeSet<String>> {
-        let path = repo()
-            .parent()?
-            .join("oss-core/crates/oss-proto/tests/vectors/clientset-asss-public.txt");
+        let path = repo().join("crates/oss-proto/tests/vectors/clientset-asss-public.txt");
         let text = std::fs::read_to_string(path).ok()?;
         let ships = oss_proto::settings::SHIP_NAMES;
         Some(
@@ -562,7 +560,16 @@ mod tests {
                     "{name}: settings.rs doesn't call {acc}"
                 ),
                 Use::Client(file, text) => {
-                    let src = std::fs::read_to_string(repo().join(file))
+                    // Client code lives in oss-client; check it when that
+                    // checkout sits next to this one, skip it otherwise.
+                    let Some(path) = repo()
+                        .parent()
+                        .map(|p| p.join("oss-client").join(file))
+                        .filter(|p| p.exists())
+                    else {
+                        continue;
+                    };
+                    let src = std::fs::read_to_string(&path)
                         .unwrap_or_else(|e| panic!("{name}: {file}: {e}"));
                     assert!(src.contains(text), "{name}: {file} doesn't use {text}");
                 }

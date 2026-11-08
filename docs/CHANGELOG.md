@@ -4,6 +4,16 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-sim (moved here from oss-client)
+- `oss-sim`, the deterministic 100 Hz ship, weapon and collision simulation, now lives in oss-core (decision U8), so the client's prediction and the server's anti-cheat run the same physics.
+  - It was imported with its history (14 commits) from oss-client.
+  - The crate name and public API are unchanged.
+  - It stays MIT, and its behaviour follows the nullspace client (MIT), as before.
+- Changes on arrival:
+  - packaging metadata, a README and LICENSE;
+  - the settings-coverage test reads the settings vectors from this repository, and checks the client-code claims only when an oss-client checkout sits alongside;
+  - `missing_docs` is allowed in the crate for now. The API is documented progressively, starting with the new server-side validation API.
+
 ### oss-net (WebSocket relay, end to end)
 - `tests/relay_e2e.rs` runs a client `Connection` through a real WebSocket relay to an `oss-net` `Server`, over loopback, with VIE and with OpenSec. It checks the subprotocol, the hello and welcome frames, 50 echoed packets and one big packet split across datagrams.
 - New examples:

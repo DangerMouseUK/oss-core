@@ -5,6 +5,10 @@
 //! The world advances in fixed 100 Hz ticks using integer arithmetic only (see
 //! [`fixed`] for units), so identical inputs give bit-identical results everywhere.
 
+// Moved from oss-client with an established API; its items are documented
+// progressively (see docs/CHANGELOG.md).
+#![allow(missing_docs)]
+
 pub mod coverage;
 pub mod fixed;
 pub mod map;
