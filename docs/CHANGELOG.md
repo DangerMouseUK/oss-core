@@ -4,6 +4,13 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (breaking)
+- `c2s::Rebroadcast`: the embedded packet is now private and never empty.
+  - Build one with `Rebroadcast::new(target, packet) -> Option<Self>`, which returns `None` for an empty packet.
+  - Read it with `packet()` or `into_packet()`.
+  - `Default` is gone.
+- Before this change an empty rebroadcast encoded to 3 bytes that decoding rejects. Now the encoder and decoder agree on every value, and the property test that found the mismatch still runs.
+
 ### oss-proto (property tests)
 - Every packet now round-trips over arbitrary field values, tested with proptest (a dev-dependency only). Covered:
   - all S2C and C2S packets: 20,000 cases each;

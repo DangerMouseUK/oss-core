@@ -443,12 +443,33 @@ impl Default for Login {
 
 /// C2S `0x0A`: relay an LVZ object packet (S2C `0x35` or `0x36`) to a player or
 /// the arena.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// The embedded packet is never empty: [`Rebroadcast::new`] refuses an empty
+/// one, just as decoding refuses a 3-byte packet, so every value encodes to
+/// something that decodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebroadcast {
     /// Target player, or -1 for the whole arena.
     pub target: i16,
-    /// The embedded S2C packet, type byte first.
-    pub packet: Vec<u8>,
+    packet: Vec<u8>,
+}
+
+impl Rebroadcast {
+    /// A rebroadcast of `packet` (an S2C packet, type byte first). `None` if
+    /// `packet` is empty.
+    pub fn new(target: i16, packet: Vec<u8>) -> Option<Self> {
+        (!packet.is_empty()).then_some(Self { target, packet })
+    }
+
+    /// The embedded S2C packet, type byte first (never empty).
+    pub fn packet(&self) -> &[u8] {
+        &self.packet
+    }
+
+    /// The embedded packet, by value.
+    pub fn into_packet(self) -> Vec<u8> {
+        self.packet
+    }
 }
 
 impl Packet for Rebroadcast {
@@ -456,17 +477,10 @@ impl Packet for Rebroadcast {
     fn decode(data: &[u8]) -> Result<Self, DecodeError> {
         let mut r = expect_type(data, Self::TYPE)?;
         let target = r.i16()?;
-        let packet = r.rest();
-        if packet.is_empty() {
-            return Err(DecodeError::Truncated {
-                kind: Self::TYPE,
-                need: 4,
-                have: data.len(),
-            });
-        }
-        Ok(Self {
-            target,
-            packet: packet.to_vec(),
+        Self::new(target, r.rest().to_vec()).ok_or(DecodeError::Truncated {
+            kind: Self::TYPE,
+            need: 4,
+            have: data.len(),
         })
     }
     fn encode(&self, out: &mut Vec<u8>) {

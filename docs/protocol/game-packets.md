@@ -280,7 +280,7 @@ Both velocities are signed 14-bit values. `0x39` entries start with a `u8` pid. 
 | 07 | take prize | 11 | `u32 time, i16 x, i16 y (tiles), i16 prize` |
 | 08 | spectate | 3 | `i16 pid` (−1 none) |
 | 09 / 24 | login | 101 / 165 | see below |
-| 0A | relay LVZ packet | 4+ | `i16 target (−1 arena)`, an S2C `0x35` or `0x36` packet |
+| 0A | relay LVZ packet | 4+ | `i16 target (−1 arena)`, an S2C `0x35` or `0x36` packet (at least its type byte: a 3-byte packet is invalid) |
 | 0B | update request | 1 | |
 | 0C | file request | 1 / 3 | [`u16 index`] into the `0x29` list |
 | 0D | news request | 1 | |

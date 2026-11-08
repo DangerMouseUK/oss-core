@@ -433,11 +433,7 @@ fn c2s_samples() -> Vec<C2SPacket> {
             ..login
         })
         .into(),
-        c2s::Rebroadcast {
-            target: -1,
-            packet: vec![0x35, 1, 0],
-        }
-        .into(),
+        c2s::Rebroadcast::new(-1, vec![0x35, 1, 0]).unwrap().into(),
         c2s::UpdateRequest {}.into(),
         c2s::MapRequest { index: None }.into(),
         c2s::MapRequest { index: Some(3) }.into(),

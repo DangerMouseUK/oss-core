@@ -499,7 +499,10 @@ fn c2s_union() -> (usize, BoxedStrategy<C2SPacket>) {
         TakeGreen => TakeGreen::arb(),
         SpecRequest => SpecRequest::arb(),
         Login => login(false),
-        Rebroadcast => (any::<i16>(), nonempty_bytes(200)).prop_map(|(target, packet)| Rebroadcast { target, packet }),
+        // Any payload, as the test that found the empty-payload asymmetry
+        // used; only the constructible ones are packets.
+        Rebroadcast => (any::<i16>(), bytes(200))
+            .prop_filter_map("empty payload", |(target, packet)| Rebroadcast::new(target, packet)),
         UpdateRequest => UpdateRequest::arb(),
         MapRequest => option::of(any::<u16>()).prop_map(|index| MapRequest { index }),
         NewsRequest => NewsRequest::arb(),
@@ -1000,4 +1003,31 @@ fn directory_packets_round_trip() {
             Ok(())
         },
     );
+}
+
+/// An empty rebroadcast used to encode to 3 bytes that do not decode; now it
+/// cannot be built, and the encoder and decoder agree on every value.
+#[test]
+fn rebroadcast_encoder_and_decoder_agree() {
+    assert_eq!(Rebroadcast::new(-1, Vec::new()), None);
+    assert!(C2SPacket::decode(&[c2s::kind::REBROADCAST, 0xFF, 0xFF]).is_err());
+    run(5_000, (any::<i16>(), bytes(200)), |(target, packet)| {
+        let raw = {
+            let mut b = alloc::vec![c2s::kind::REBROADCAST];
+            b.extend_from_slice(&target.to_le_bytes());
+            b.extend_from_slice(&packet);
+            b
+        };
+        match Rebroadcast::new(target, packet.clone()) {
+            Some(p) => {
+                prop_assert_eq!(p.to_bytes(), raw.clone());
+                prop_assert_eq!(Rebroadcast::decode(&raw), Ok(p));
+            }
+            None => {
+                prop_assert!(packet.is_empty());
+                prop_assert!(Rebroadcast::decode(&raw).is_err());
+            }
+        }
+        Ok(())
+    });
 }
