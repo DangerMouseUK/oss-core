@@ -22,8 +22,8 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 ## Notes
 
-Sources mention 128 and 256 bytes.
+The reference server keeps at most 256 bytes; other sources mention 128.
 
 ## Evidence
 
-**Sources.** The reference server's billing client, Subspace Server .NET and the billing protocol write-up; not among the reference vectors. See [verification.md](../verification.md) for the levels.
+**Sources.** The reference server's `B2S_BillingIdentity` struct and handler and the billing protocol write-up; not among the compiled vectors. See [verification.md](../verification.md) for the levels.

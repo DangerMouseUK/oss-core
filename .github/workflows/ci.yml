@@ -41,6 +41,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p oss-net --no-default-features --all-targets -- -D warnings
       - run: cargo clippy -p oss-net --no-default-features --features opensec --all-targets -- -D warnings
+      # The optional ring backend for OpenSec records (servers).
+      - run: cargo clippy -p oss-net --features opensec-ring --all-targets -- -D warnings
+      - run: cargo test -p oss-net --features opensec-ring
       # Browser builds: every crate with default features, and oss-net bare.
       - run: cargo build --target wasm32-unknown-unknown -p oss-proto -p oss-formats -p oss-net
       - run: cargo build --target wasm32-unknown-unknown -p oss-net --no-default-features

@@ -17,10 +17,14 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x31` |
 | 1 | 4 | u32 | score_id |  |
-| 5 | 4 | u32 | score_id_neg | Negated score id |
+| 5 | 4 | u32 | score_id_neg | Must equal `-score_id` (as `i32`) |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
+## Notes
+
+The reference server ignores the packet unless the two ids agree.
+
 ## Evidence
 
-**Sources.** The reference server's billing client, Subspace Server .NET and the billing protocol write-up; not among the reference vectors. See [verification.md](../verification.md) for the levels.
+**Sources.** The reference server's `B2S_Scorereset` struct and handler and the billing protocol write-up; not among the compiled vectors. See [verification.md](../verification.md) for the levels.

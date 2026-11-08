@@ -16,11 +16,15 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Offset | Size | Type | Field | Meaning |
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x32` |
-| 1 | 4 | u32 | connection_id |  |
-| 5 | n | packet | data | A game packet to forward to the player |
+| 1 | 4 | u32 | connection_id | `0xFFFFFFFF` = every player (the reference server refuses that) |
+| 5 | n | packet | data | A game packet to forward to the player: 1 to 1024 bytes |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
+## Notes
+
+The reference server ignores a user packet with no data.
+
 ## Evidence
 
-**Sources.** The reference server's billing client, Subspace Server .NET and the billing protocol write-up; not among the reference vectors. See [verification.md](../verification.md) for the levels.
+**Sources.** The reference server's `B2S_UserPacket` struct and handler, Subspace Server .NET and the billing protocol write-up; not among the compiled vectors. See [verification.md](../verification.md) for the levels.

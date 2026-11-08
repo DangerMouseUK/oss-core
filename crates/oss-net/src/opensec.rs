@@ -18,8 +18,6 @@
 
 use std::sync::Arc;
 
-use chacha20poly1305::aead::{AeadInOut, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 /// X25519 key types used by [`server_respond`] and [`client_finish`].
@@ -106,11 +104,100 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn nonce(dir: u32, counter: u64) -> Nonce {
+fn nonce(dir: u32, counter: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[..4].copy_from_slice(&dir.to_le_bytes());
     n[4..].copy_from_slice(&counter.to_le_bytes());
-    Nonce::from(n)
+    n
+}
+
+/// The record AEAD (ChaCha20-Poly1305, RFC 8439). The default is RustCrypto's
+/// pure-Rust implementation, which also builds for wasm. The `opensec-ring`
+/// feature uses ring's assembly implementation instead: two to three times
+/// faster per record (see `docs/performance.md`), but it compiles C and
+/// assembly. Both compute the same function, which the published vectors check.
+mod aead {
+    /// A keyed AEAD.
+    #[cfg(not(feature = "opensec-ring"))]
+    pub(super) struct Key(chacha20poly1305::ChaCha20Poly1305);
+    /// A keyed AEAD.
+    #[cfg(feature = "opensec-ring")]
+    pub(super) struct Key(ring::aead::LessSafeKey);
+
+    #[cfg(not(feature = "opensec-ring"))]
+    impl Key {
+        pub(super) fn new(key: &[u8; 32]) -> Self {
+            use chacha20poly1305::aead::KeyInit;
+            Self(chacha20poly1305::ChaCha20Poly1305::new(key.into()))
+        }
+
+        /// Encrypts `buf` in place and returns the tag.
+        pub(super) fn seal(&self, nonce: [u8; 12], aad: &[u8], buf: &mut [u8]) -> [u8; 16] {
+            use chacha20poly1305::aead::AeadInOut;
+            self.0
+                .encrypt_inout_detached(&nonce.into(), aad, buf.into())
+                .expect("records are far below the AEAD length limit")
+                .into()
+        }
+
+        /// Decrypts `buf` in place if `tag` authenticates it.
+        pub(super) fn open(
+            &self,
+            nonce: [u8; 12],
+            aad: &[u8],
+            buf: &mut [u8],
+            tag: &[u8; 16],
+        ) -> bool {
+            use chacha20poly1305::aead::AeadInOut;
+            self.0
+                .decrypt_inout_detached(&nonce.into(), aad, buf.into(), &(*tag).into())
+                .is_ok()
+        }
+    }
+
+    #[cfg(feature = "opensec-ring")]
+    impl Key {
+        pub(super) fn new(key: &[u8; 32]) -> Self {
+            use ring::aead::{CHACHA20_POLY1305, LessSafeKey, UnboundKey};
+            Self(LessSafeKey::new(
+                UnboundKey::new(&CHACHA20_POLY1305, key).expect("32-byte key"),
+            ))
+        }
+
+        /// Encrypts `buf` in place and returns the tag.
+        pub(super) fn seal(&self, nonce: [u8; 12], aad: &[u8], buf: &mut [u8]) -> [u8; 16] {
+            use ring::aead::{Aad, Nonce};
+            let tag = self
+                .0
+                .seal_in_place_separate_tag(
+                    Nonce::assume_unique_for_key(nonce),
+                    Aad::from(aad),
+                    buf,
+                )
+                .expect("records are far below the AEAD length limit");
+            tag.as_ref().try_into().expect("16-byte tag")
+        }
+
+        /// Decrypts `buf` in place if `tag` authenticates it.
+        pub(super) fn open(
+            &self,
+            nonce: [u8; 12],
+            aad: &[u8],
+            buf: &mut [u8],
+            tag: &[u8; 16],
+        ) -> bool {
+            use ring::aead::{Aad, Nonce, Tag};
+            self.0
+                .open_in_place_separate_tag(
+                    Nonce::assume_unique_for_key(nonce),
+                    Aad::from(aad),
+                    Tag::from(*tag),
+                    buf,
+                    0..,
+                )
+                .is_ok()
+        }
+    }
 }
 
 /// Session keys and transcript hash derived from a handshake.
@@ -155,11 +242,7 @@ fn derive(client_hello: &[u8], server_hello_body: &[u8], ee: &[u8; 32], es: &[u8
 }
 
 fn confirm_tag(keys: &SessionKeys) -> [u8; 16] {
-    let aead = ChaCha20Poly1305::new_from_slice(&keys.s2c).expect("32-byte key");
-    let tag = aead
-        .encrypt_inout_detached(&nonce(DIR_S2C, 0), &keys.transcript, (&mut [][..]).into())
-        .expect("empty message");
-    tag.into()
+    aead::Key::new(&keys.s2c).seal(nonce(DIR_S2C, 0), &keys.transcript, &mut [])
 }
 
 /// Builds a client hello.
@@ -196,19 +279,12 @@ impl Direction {
 /// form `0xF5 | low 32 bits of counter | ciphertext | tag`. For tests and
 /// interoperability checks; sessions use [`OpenSecCipher`].
 pub fn seal_record(key: &[u8; 32], dir: Direction, counter: u64, plaintext: &[u8]) -> Vec<u8> {
-    let aead = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
     let mut out = Vec::with_capacity(plaintext.len() + OVERHEAD);
     out.push(RECORD_MARKER);
     out.extend_from_slice(&(counter as u32).to_le_bytes());
     let header: [u8; 5] = out[..5].try_into().expect("5 bytes");
     let mut body = plaintext.to_vec();
-    let tag = aead
-        .encrypt_inout_detached(
-            &nonce(dir.nonce_dir(), counter),
-            &header,
-            body.as_mut_slice().into(),
-        )
-        .expect("records are far below the AEAD length limit");
+    let tag = aead::Key::new(key).seal(nonce(dir.nonce_dir(), counter), &header, &mut body);
     out.extend_from_slice(&body);
     out.extend_from_slice(&tag);
     out
@@ -229,18 +305,17 @@ pub fn open_record(
     {
         return None;
     }
-    let aead = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
     let tag_at = datagram.len() - 16;
-    let tag = Tag::try_from(&datagram[tag_at..]).ok()?;
+    let tag: [u8; 16] = datagram[tag_at..].try_into().ok()?;
     let mut body = datagram[5..tag_at].to_vec();
-    aead.decrypt_inout_detached(
-        &nonce(dir.nonce_dir(), counter),
-        &datagram[..5],
-        body.as_mut_slice().into(),
-        &tag,
-    )
-    .ok()?;
-    Some(body)
+    aead::Key::new(key)
+        .open(
+            nonce(dir.nonce_dir(), counter),
+            &datagram[..5],
+            &mut body,
+            &tag,
+        )
+        .then_some(body)
 }
 
 /// Whether `data` is an OpenSec client hello (any version).
@@ -250,8 +325,8 @@ pub fn is_client_hello(data: &[u8]) -> bool {
 
 /// The record cipher for an established OpenSec session.
 pub struct OpenSecCipher {
-    send: ChaCha20Poly1305,
-    recv: ChaCha20Poly1305,
+    send: aead::Key,
+    recv: aead::Key,
     send_dir: u32,
     recv_dir: u32,
     send_counter: u64,
@@ -271,8 +346,8 @@ impl core::fmt::Debug for OpenSecCipher {
 impl OpenSecCipher {
     /// The cipher for one side of a session.
     pub fn new(keys: &SessionKeys, is_server: bool, peer_key: Option<[u8; 32]>) -> Self {
-        let c2s = ChaCha20Poly1305::new_from_slice(&keys.c2s).expect("32-byte key");
-        let s2c = ChaCha20Poly1305::new_from_slice(&keys.s2c).expect("32-byte key");
+        let c2s = aead::Key::new(&keys.c2s);
+        let s2c = aead::Key::new(&keys.s2c);
         let (send, recv, send_dir, recv_dir) = if is_server {
             (s2c, c2s, DIR_S2C, DIR_C2S)
         } else {
@@ -339,12 +414,7 @@ impl Cipher for OpenSecCipher {
         header[1..].copy_from_slice(&low.to_le_bytes());
         let tag = self
             .send
-            .encrypt_inout_detached(
-                &nonce(self.send_dir, self.send_counter),
-                &header,
-                datagram.as_mut_slice().into(),
-            )
-            .expect("datagrams are far below the AEAD length limit");
+            .seal(nonce(self.send_dir, self.send_counter), &header, datagram);
         datagram.splice(0..0, header);
         datagram.extend_from_slice(&tag);
     }
@@ -361,16 +431,13 @@ impl Cipher for OpenSecCipher {
         let mut header = [0u8; 5];
         header.copy_from_slice(&datagram[..5]);
         let tag_at = datagram.len() - 16;
-        let tag = Tag::try_from(&datagram[tag_at..]).expect("16 bytes");
-        let ok = self
-            .recv
-            .decrypt_inout_detached(
-                &nonce(self.recv_dir, counter),
-                &header,
-                (&mut datagram[5..tag_at]).into(),
-                &tag,
-            )
-            .is_ok();
+        let tag: [u8; 16] = datagram[tag_at..].try_into().expect("16 bytes");
+        let ok = self.recv.open(
+            nonce(self.recv_dir, counter),
+            &header,
+            &mut datagram[5..tag_at],
+            &tag,
+        );
         if !ok {
             return false;
         }
@@ -823,16 +890,11 @@ mod tests {
         );
         // RFC 8439, section 2.8.2.
         let key: Vec<u8> = (0x80..=0x9f).collect();
-        let aead = ChaCha20Poly1305::new_from_slice(&key).unwrap();
+        let key: [u8; 32] = key.try_into().unwrap();
         let n: [u8; 12] = unhex("070000004041424344454647").try_into().unwrap();
         let mut msg = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.".to_vec();
-        let tag = aead
-            .encrypt_inout_detached(
-                &Nonce::from(n),
-                &unhex("50515253c0c1c2c3c4c5c6c7"),
-                msg.as_mut_slice().into(),
-            )
-            .unwrap();
+        // Through whichever backend this build uses.
+        let tag = aead::Key::new(&key).seal(n, &unhex("50515253c0c1c2c3c4c5c6c7"), &mut msg);
         assert_eq!(msg[..16], unhex("d31a8d34648e60db7b86afbc53ef7ec2"));
         assert_eq!(tag[..], unhex("1ae10b594f09e26a7e902ecbd0600691"));
         // RFC 5869, test case 1.

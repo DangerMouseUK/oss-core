@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (OpenSec backend)
+- New optional feature `opensec-ring`: OpenSec records use ring's assembly ChaCha20-Poly1305 instead of RustCrypto's pure-Rust one.
+  - It is two to three times faster per record (189 vs 325 ns for 16 bytes, 428 vs 1,084 ns for 491). At 500 players OpenSec drops from 5.3% to 4.2% of a core.
+  - The wire format is the same: both backends produce the published OpenSec vectors and the RFC 8439 vector.
+  - It is off by default because it compiles C and assembly and isn't for wasm. CI runs clippy and the tests with it.
+- `docs/performance.md` has new soak results for every cipher at 100, 250, 500 and 1,000 players. It also explains why the portable Poly1305 must stay, answers whether the remaining gap is the floor (with `ring`, about 1.4 points over VIE at 500 players), and gives operators a budget.
+- Docs: the biller user packet (`0x32`), identity (`0x33`) and score reset (`0x31`) pages now give the reference server's limits.
+
 ### oss-conformance (wider)
 - The packet vectors now include every length form of the packets whose form is chosen by length. New: S2C `0x05` at 21 and 31 bytes, `0x28` at 16 and 18, and the one-entry 25-byte `0x29`, which must not be read as the 21-byte form. 3,749 vector checks.
 - New live server checks:
