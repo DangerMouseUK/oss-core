@@ -16,6 +16,8 @@
 #![no_std]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 pub mod billing;
 pub mod c2s;
@@ -46,3 +48,6 @@ pub use wire::{FixedStr, Packet};
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
+
+#[cfg(test)]
+mod proptests;

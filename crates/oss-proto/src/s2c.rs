@@ -730,6 +730,16 @@ macro_rules! list_packet {
                 self.$field.iter().for_each(|e| e.write(out));
             }
         }
+
+        #[cfg(test)]
+        impl $name {
+            /// Property tests: a list of arbitrary entries.
+            pub(crate) fn arb() -> impl proptest::strategy::Strategy<Value = Self> {
+                use proptest::strategy::Strategy;
+                proptest::collection::vec($crate::wire::arb_wire::<$t>(), $min..$min + 40)
+                    .prop_map(|$field| Self { $field })
+            }
+        }
     };
 }
 

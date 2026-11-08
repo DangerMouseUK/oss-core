@@ -386,5 +386,29 @@ macro_rules! fixed_packet {
                 $( <$t as $crate::wire::Wire>::write(&self.$f, out); )*
             }
         }
+
+        #[cfg(test)]
+        impl $name {
+            /// Property tests: a value with every field arbitrary.
+            #[allow(unused_mut, unused_variables)]
+            pub(crate) fn arb() -> impl proptest::strategy::Strategy<Value = Self> {
+                use proptest::strategy::Strategy;
+                proptest::collection::vec(proptest::arbitrary::any::<u8>(), Self::LEN - 1)
+                    .prop_map(|b| {
+                        let mut r = $crate::wire::Reader::new(&b, $ty);
+                        Self { $( $f: <$t as $crate::wire::Wire>::read(&mut r).unwrap(), )* }
+                    })
+            }
+        }
     };
+}
+
+/// Property tests: an arbitrary value of a fixed-size field. Every byte pattern
+/// is a valid encoding, so this covers the whole value space.
+#[cfg(test)]
+pub(crate) fn arb_wire<T: Wire + core::fmt::Debug>() -> impl proptest::strategy::Strategy<Value = T>
+{
+    use proptest::strategy::Strategy;
+    proptest::collection::vec(proptest::arbitrary::any::<u8>(), T::SIZE)
+        .prop_map(|b| T::read(&mut Reader::new(&b, 0)).unwrap())
 }

@@ -4,6 +4,15 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (property tests)
+- Every packet now round-trips over arbitrary field values, tested with proptest (a dev-dependency only). Covered:
+  - all S2C and C2S packets: 20,000 cases each;
+  - core `0x00` packets: 20,000 cases;
+  - billing and directory packets;
+  - typed `Packet` impls, including the boxed ones.
+- Fixed-layout packets get their generators from the packet macros. A compile-time exhaustive `match` plus a coverage test make sure every enum variant is generated.
+- Constraint the tests surfaced: C2S `0x0A` (rebroadcast) must carry a non-empty inner packet. An empty one encodes to 3 bytes that the decoder rejects.
+
 ### oss-bot-sdk (new crate, MIT)
 - A small layer over `oss-net` and `oss-proto` that turns a bot into one file. See the crate README and `examples/greeter.rs`, which greets players and answers `!ping`.
 - `Session` is the sans-IO core. It handles:
