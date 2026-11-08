@@ -11,6 +11,13 @@ use std::hash::Hash;
 use crate::cipher::Acceptor;
 use crate::connection::{Config, Connection, DisconnectReason, Event, Pool};
 
+/// Buffers a connection is topped up to when the server collects its output.
+const CONN_REFILL: usize = 16;
+/// Smallest limit of the server's shared buffer pool.
+const SHARED_POOL_MIN: usize = 256;
+/// Shared pool buffers allowed per connection.
+const SHARED_POOL_PER_CONN: usize = 8;
+
 /// Multiplexes connections for a listening socket.
 pub struct Server<A> {
     cfg: Config,
@@ -150,8 +157,9 @@ impl<A: Eq + Hash + Clone> Server<A> {
         let Some(conn) = self.conns.get_mut(addr) else {
             return;
         };
-        // Hand recycled buffers back to the connection.
-        conn.pool_mut().refill_from(&mut self.pool, 32);
+        // Hand recycled buffers back to the connection: a few, so they keep
+        // circulating instead of piling up in idle connections.
+        conn.pool_mut().refill_from(&mut self.pool, CONN_REFILL);
         while let Some(d) = conn.poll_transmit() {
             self.raw_out.push_back((addr.clone(), d));
         }
@@ -182,7 +190,10 @@ impl<A: Eq + Hash + Clone> Server<A> {
     /// reuse. Recycling every buffer keeps the server free of per-packet
     /// allocations once warmed up.
     pub fn recycle(&mut self, buf: Vec<u8>) {
-        self.pool.put(buf);
+        // Every connection's datagrams and packets come back through here, so
+        // the shared pool must hold about one tick's worth for all of them.
+        let limit = SHARED_POOL_MIN.max(self.conns.len() * SHARED_POOL_PER_CONN);
+        self.pool.put_bounded(buf, limit);
     }
 
     /// Queues a packet to one connection (see [`Connection::send`]).

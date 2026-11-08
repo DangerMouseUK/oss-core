@@ -58,6 +58,16 @@ jobs:
           workspaces: fuzz
       - run: cargo check --manifest-path fuzz/Cargo.toml --bins
 
+  # The transport budget: 500 players must fit in 20% of a core (it uses about
+  # 3% on a desktop CPU), with no reliable packet lost. See docs/performance.md.
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --release -p oss-net --example soak -- --peers 500 --seconds 30 --max-cpu 20
+
   msrv:
     runs-on: ubuntu-latest
     steps:

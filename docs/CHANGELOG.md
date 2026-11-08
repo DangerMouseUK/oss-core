@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (performance)
+- `examples/soak.rs` is a load and soak harness. It drives hundreds of simulated players through one `Server` with configurable loss, latency, jitter, position fan-out, reliable chat and churn, and reports server CPU, cost per packet, throughput, server heap and reliable delivery. Runs are reproducible.
+  - Results and method: `docs/performance.md`.
+  - With VIE, 500 players take about 3% of a core; with OpenSec, about 12%.
+  - CI runs it with `--max-cpu 20`.
+- Fixed per-packet allocations under load: the server's shared buffer pool was capped at 256 buffers. It now scales with the connection count, and connections are topped up to 16 buffers. At 500 players, allocations fell from about 27,700 to about 30 per second.
+- New `Connection::queued_reliable()`: the reliable backlog (waiting plus unacknowledged), for back-pressure and metrics.
+
 ### oss-proto (breaking)
 - `c2s::Rebroadcast`: the embedded packet is now private and never empty.
   - Build one with `Rebroadcast::new(target, packet) -> Option<Self>`, which returns `None` for an empty packet.

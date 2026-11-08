@@ -263,8 +263,14 @@ impl Pool {
         b
     }
 
-    pub(crate) fn put(&mut self, mut b: Vec<u8>) {
-        if self.free.len() < POOL_LIMIT && b.capacity() >= BUF_CAPACITY && b.capacity() <= 4096 {
+    pub(crate) fn put(&mut self, b: Vec<u8>) {
+        self.put_bounded(b, POOL_LIMIT);
+    }
+
+    /// Like [`Pool::put`] with a caller-chosen size limit (a server's shared
+    /// pool grows with its connection count).
+    pub(crate) fn put_bounded(&mut self, mut b: Vec<u8>, limit: usize) {
+        if self.free.len() < limit && b.capacity() >= BUF_CAPACITY && b.capacity() <= 4096 {
             b.clear();
             self.free.push(b);
         }
@@ -542,6 +548,13 @@ impl Connection {
     /// Counters.
     pub fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// Reliable packets not yet acknowledged: waiting for the send window plus
+    /// sent and unacknowledged. A growing value means the peer cannot keep up;
+    /// servers can use it for back-pressure or metrics.
+    pub fn queued_reliable(&self) -> usize {
+        self.pending.len() + self.in_flight.len()
     }
 
     /// Smoothed round-trip time from reliable acknowledgements (ms).
