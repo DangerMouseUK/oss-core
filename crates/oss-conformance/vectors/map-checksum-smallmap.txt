@@ -1,0 +1,42 @@
+# Map security checksum vectors from ASSS 1.4.4 src/core/mapdata.c (load_from_file + GetChecksum,
+# compiled unmodified). Tiles counted: 1..160 and 171 (safe); big objects expanded as ASSS does.
+# Keys >= 0x80000000 are negative as int: ASSS then starts x/y at negative offsets and its sparse
+# array wraps coordinates mod 1024. Whether Continuum does the same is unconfirmed.
+# map <label> <file name> <file size> <crc32 of file (zlib; the S2C 0x29 map checksum)>
+# tiles <non-zero tiles after expansion> <turf flags> <out-of-range tile records>
+# checksum <key> <map checksum>
+map asss maps/smallmap.lvl smallmap.lvl 4944 b2fb5159
+tiles 1236 0 0
+checksum 00000000 000000ab
+checksum 00000001 000001e0
+checksum 0000001f 00000140
+checksum 00000020 000000fd
+checksum 12345678 2468ad4b
+checksum 7fffffff fffffe6d
+checksum 80000000 8000010d
+checksum deadbeef deadbeef
+checksum ffffffff fffffee0
+checksum 210ba697 42174d7c
+checksum 26910f0c 26910f0c
+checksum 7482f9fc 7482f9fc
+checksum a0c945ce 41928b33
+checksum 19ac2485 335848b3
+checksum b04bf585 6097eab3
+checksum 43392cf0 43392cf0
+checksum bc50e2aa 78a1c4ab
+checksum 0065ba9c 00cb74d3
+checksum 162499f0 2c49334b
+checksum 4eababf9 4eababf9
+checksum 1284114f 378c3470
+checksum 67e92b15 cfd256d3
+checksum 719cfaeb 719cfaeb
+checksum 14293ed4 3c7bbbd2
+checksum a58e7048 a58e7048
+checksum 487a3ad0 90f4754b
+checksum 8434339c 086866d3
+checksum 1da37a17 58ea6f38
+checksum fd22ec09 f768c54d
+checksum 3fd7caf0 3fd7caf0
+checksum f2f67d71 f2f67d71
+checksum 33dab561 33dab561
+checksum ce68e7b8 ce68e7b8

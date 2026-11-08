@@ -1,0 +1,961 @@
+//! Live checks over UDP: the suite plays a client against a server under test,
+//! or a zone that a client under test connects to.
+//!
+//! Each check is described in `docs/conformance.md`. The transport-level server
+//! checks use hand-built datagrams; everything after the handshake uses
+//! `oss-net`'s connection, which is itself verified against the reference
+//! vectors.
+
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
+use std::time::{Duration, Instant};
+
+use oss_formats::Level;
+use oss_net::opensec::{OpenSecAcceptor, os_entropy};
+use oss_net::{
+    Config, Connection, Event, Server, VieAcceptor, VieCipher, VieClientHandshake,
+    vie::server_key_for,
+};
+use oss_proto::c2s::{self, GoArena, Login, MapRequest, SecurityResponse, arena_type};
+use oss_proto::checksum::{crc32, map_checksum, settings_checksum, vie_exe_checksum};
+use oss_proto::common::PlayerData;
+use oss_proto::s2c::{self, MapFilename, login_code};
+use oss_proto::wire::FixedStr;
+use oss_proto::{C2SPacket, C2SPosition, CorePacket, S2CPacket};
+
+use crate::report::Report;
+use crate::vectors::{MAPS, unhex};
+
+/// The settings packet the suite's zone sends (from the reference server).
+fn reference_settings() -> Vec<u8> {
+    let text = crate::vectors::FILES
+        .iter()
+        .find(|(n, _)| *n == "clientset-asss-public.txt")
+        .map(|(_, t)| *t)
+        .unwrap_or("");
+    text.lines()
+        .find_map(|l| l.strip_prefix("packet "))
+        .and_then(|h| unhex(h.trim()))
+        .unwrap_or_default()
+}
+
+fn smallmap() -> &'static [u8] {
+    MAPS.iter()
+        .find(|(n, _)| *n == "smallmap.lvl")
+        .map(|(_, b)| *b)
+        .unwrap_or(&[])
+}
+
+fn seed() -> u32 {
+    let mut b = [0u8; 4];
+    os_entropy()(&mut b);
+    u32::from_le_bytes(b)
+}
+
+/// Monotonic milliseconds since `start`.
+fn ms(start: Instant) -> u64 {
+    start.elapsed().as_millis() as u64
+}
+
+// ---- server under test -------------------------------------------------------------
+
+/// Options for [`check_server`].
+#[derive(Debug, Clone)]
+pub struct ServerOptions {
+    /// Login name; a random `conformance-xxxx` name if `None`.
+    pub name: Option<String>,
+    /// Password.
+    pub password: String,
+    /// Arena to enter (`None` = any public arena).
+    pub arena: Option<String>,
+    /// How long to wait for each answer.
+    pub timeout: Duration,
+}
+
+impl Default for ServerOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            password: "conformance".into(),
+            arena: None,
+            timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Unwraps clusters and reliables (acking nothing) and returns every packet in
+/// a datagram, plus the sequence numbers of reliables it carried.
+fn flatten(d: &[u8], out: &mut Vec<Vec<u8>>, reliables: &mut Vec<u32>, depth: u32) {
+    if depth > 4 {
+        return;
+    }
+    match CorePacket::decode(d) {
+        Ok(CorePacket::Cluster(c)) => {
+            for item in c.iter().flatten() {
+                flatten(item, out, reliables, depth + 1);
+            }
+        }
+        Ok(CorePacket::Reliable { seq, payload }) => {
+            reliables.push(seq);
+            flatten(payload, out, reliables, depth + 1);
+        }
+        _ => out.push(d.to_vec()),
+    }
+}
+
+/// A raw VIE session for the transport checks.
+struct Raw {
+    sock: UdpSocket,
+    cipher: Option<VieCipher>,
+}
+
+impl Raw {
+    fn send(&self, mut d: Vec<u8>) -> io::Result<()> {
+        if let Some(c) = &self.cipher {
+            c.encrypt(&mut d);
+        }
+        self.sock.send(&d).map(|_| ())
+    }
+
+    /// Receives packets until `want` matches one or `timeout` passes; returns
+    /// every packet seen. Acknowledges server reliables.
+    fn collect(
+        &self,
+        timeout: Duration,
+        mut want: impl FnMut(&[u8]) -> bool,
+    ) -> (bool, Vec<Vec<u8>>) {
+        let start = Instant::now();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 2048];
+        while start.elapsed() < timeout {
+            let Ok(n) = self.sock.recv(&mut buf) else {
+                continue;
+            };
+            let mut d = buf[..n].to_vec();
+            if let Some(c) = &self.cipher {
+                c.decrypt(&mut d);
+            }
+            let (mut pkts, mut rel) = (Vec::new(), Vec::new());
+            flatten(&d, &mut pkts, &mut rel, 0);
+            for seq in rel {
+                let mut ack = vec![0, 4];
+                ack.extend_from_slice(&seq.to_le_bytes());
+                let _ = self.send(ack);
+            }
+            let mut hit = false;
+            for p in pkts {
+                hit |= want(&p);
+                seen.push(p);
+            }
+            if hit {
+                return (true, seen);
+            }
+        }
+        (false, seen)
+    }
+}
+
+fn sync_request(time: u32) -> Vec<u8> {
+    let mut p = vec![0, 5];
+    p.extend_from_slice(&time.to_le_bytes());
+    p.extend_from_slice(&[0; 8]);
+    p
+}
+
+fn is_sync_response(p: &[u8], time: u32) -> bool {
+    matches!(CorePacket::decode(p), Ok(CorePacket::SyncResponse { client_time, .. }) if client_time == time)
+}
+
+fn is_ack(p: &[u8], want: u32) -> bool {
+    matches!(CorePacket::decode(p), Ok(CorePacket::Ack { seq }) if seq == want)
+}
+
+/// Checks a server at `addr`: transport behaviour with hand-built datagrams,
+/// then login, arena entry, map download and the security exchange.
+pub fn check_server(addr: SocketAddr, opts: &ServerOptions) -> io::Result<Report> {
+    let mut r = Report::default();
+    transport_checks(addr, opts, &mut r)?;
+    session_checks(addr, opts, &mut r)?;
+    Ok(r)
+}
+
+fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io::Result<()> {
+    const G: &str = "server.transport";
+    let bind = if addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let sock = UdpSocket::bind(bind)?;
+    sock.connect(addr)?;
+    sock.set_read_timeout(Some(Duration::from_millis(50)))?;
+    let mut raw = Raw { sock, cipher: None };
+
+    // Connect: 00 01 key protocol(1), resent each second.
+    let key = 0x8000_0000 | seed();
+    let mut req = vec![0, 1];
+    req.extend_from_slice(&key.to_le_bytes());
+    req.extend_from_slice(&1u16.to_le_bytes());
+    let start = Instant::now();
+    let mut server_key = None;
+    while server_key.is_none() && start.elapsed() < opts.timeout {
+        raw.sock.send(&req)?;
+        let (_, seen) = raw.collect(Duration::from_secs(1), |p| p.len() >= 6 && p[..2] == [0, 2]);
+        server_key = seen
+            .iter()
+            .find(|p| p.len() >= 6 && p[..2] == [0, 2])
+            .map(|p| u32::from_le_bytes(p[2..6].try_into().unwrap()));
+    }
+    let Some(server_key) = server_key else {
+        r.fail(G, "connect", "no 00 02 answer to a VIE connection request");
+        r.skip(G, "remaining transport checks", "not connected");
+        return Ok(());
+    };
+    r.pass(G, "connect");
+    if server_key == key {
+        r.pass(G, "connect-key (no encryption)");
+    } else {
+        r.check(
+            G,
+            "connect-key",
+            server_key == server_key_for(key),
+            format!("client key {key:08x}: expected server key {:08x} (or {key:08x} for none), got {server_key:08x}", server_key_for(key)),
+        );
+        raw.cipher = VieCipher::new(server_key);
+    }
+
+    // Time sync.
+    let (ok, _) = {
+        raw.send(sync_request(1111))?;
+        raw.collect(opts.timeout, |p| is_sync_response(p, 1111))
+    };
+    r.check(G, "sync", ok, "no 00 06 echoing the 00 05 time");
+
+    // A reliable packet carrying a sync request: acked, and its payload handled.
+    let mut rel = vec![0, 3];
+    rel.extend_from_slice(&0u32.to_le_bytes());
+    rel.extend_from_slice(&sync_request(2222));
+    raw.send(rel.clone())?;
+    let mut acked = false;
+    let mut answered = 0;
+    let (_, seen) = raw.collect(opts.timeout, |p| {
+        acked |= is_ack(p, 0);
+        answered += usize::from(is_sync_response(p, 2222));
+        acked && answered > 0
+    });
+    let _ = seen;
+    r.check(G, "reliable-ack", acked, "no 00 04 for reliable sequence 0");
+    r.check(
+        G,
+        "reliable-payload",
+        answered == 1,
+        format!("expected one answer to the payload, got {answered}"),
+    );
+
+    // The same reliable again: acked again, payload not handled twice.
+    raw.send(rel)?;
+    let mut acked = false;
+    let mut again = 0;
+    raw.collect(Duration::from_millis(1500), |p| {
+        acked |= is_ack(p, 0);
+        again += usize::from(is_sync_response(p, 2222));
+        false
+    });
+    r.check(
+        G,
+        "duplicate-reliable-acked",
+        acked,
+        "a duplicate reliable must be acknowledged again",
+    );
+    r.check(
+        G,
+        "duplicate-reliable-ignored",
+        again == 0,
+        "the duplicate's payload was handled again",
+    );
+
+    // A cluster of two sync requests: both answered.
+    let mut cl = vec![0, 0x0E];
+    for t in [3333u32, 4444] {
+        let s = sync_request(t);
+        cl.push(s.len() as u8);
+        cl.extend_from_slice(&s);
+    }
+    raw.send(cl)?;
+    let (mut a, mut b) = (false, false);
+    raw.collect(opts.timeout, |p| {
+        a |= is_sync_response(p, 3333);
+        b |= is_sync_response(p, 4444);
+        a && b
+    });
+    r.check(
+        G,
+        "cluster",
+        a && b,
+        "both packets in a 00 0E cluster must be handled",
+    );
+
+    // Disconnect: the session ends and later packets are ignored.
+    raw.send(vec![0, 7])?;
+    std::thread::sleep(Duration::from_millis(300));
+    raw.send(sync_request(5555))?;
+    let (answered, _) = raw.collect(Duration::from_millis(1500), |p| is_sync_response(p, 5555));
+    r.check(
+        G,
+        "disconnect",
+        !answered,
+        "the server still answered after 00 07",
+    );
+    Ok(())
+}
+
+/// A client session over oss-net: collects decoded server packets.
+struct Session {
+    sock: UdpSocket,
+    conn: Connection,
+    start: Instant,
+    packets: Vec<(Vec<u8>, S2CPacket)>,
+    closed: bool,
+}
+
+impl Session {
+    fn pump(&mut self, dur: Duration, mut until: impl FnMut(&S2CPacket) -> bool) -> bool {
+        let end = Instant::now() + dur;
+        let mut buf = [0u8; 2048];
+        while Instant::now() < end {
+            if let Ok(n) = self.sock.recv(&mut buf) {
+                self.conn.handle_datagram(ms(self.start), &buf[..n]);
+            }
+            self.conn.tick(ms(self.start));
+            while let Some(d) = self.conn.poll_transmit() {
+                let _ = self.sock.send(&d);
+            }
+            let mut hit = false;
+            while let Some(e) = self.conn.poll_event() {
+                match e {
+                    Event::Packet(p) => {
+                        if let Ok(pk) = S2CPacket::decode(&p) {
+                            hit |= until(&pk);
+                            self.packets.push((p, pk));
+                        }
+                    }
+                    Event::Disconnected(_) => self.closed = true,
+                    _ => {}
+                }
+            }
+            if hit || self.closed {
+                return hit;
+            }
+        }
+        false
+    }
+
+    fn send(&mut self, p: impl Into<C2SPacket>) {
+        self.conn.send(&p.into().to_bytes(), true);
+    }
+}
+
+fn session_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io::Result<()> {
+    const G: &str = "server.session";
+    let bind = if addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let sock = UdpSocket::bind(bind)?;
+    sock.connect(addr)?;
+    sock.set_read_timeout(Some(Duration::from_millis(5)))?;
+    let start = Instant::now();
+    let conn = Connection::client(
+        Config::client(),
+        Box::new(VieClientHandshake::new(seed())),
+        0,
+    );
+    let mut s = Session {
+        sock,
+        conn,
+        start,
+        packets: Vec::new(),
+        closed: false,
+    };
+    let deadline = Instant::now() + opts.timeout;
+    while !s.conn.is_connected() && Instant::now() < deadline && !s.closed {
+        s.pump(Duration::from_millis(50), |_| false);
+    }
+    if !s.conn.is_connected() {
+        r.fail(G, "connect", "VIE session not established");
+        return Ok(());
+    }
+    let name = opts
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("conformance-{:04x}", seed() & 0xFFFF));
+    let login = |flags| Login {
+        flags,
+        name: FixedStr::new(name.as_bytes()),
+        password: FixedStr::new(opts.password.as_bytes()),
+        machine_id: seed(),
+        ..Login::default()
+    };
+    s.send(login(0));
+    let mut code = None;
+    for attempt in 0..2 {
+        s.pump(opts.timeout, |p| matches!(p, S2CPacket::LoginResponse(_)));
+        code = s.packets.iter().rev().find_map(|(_, p)| match p {
+            S2CPacket::LoginResponse(l) => Some(l.code),
+            _ => None,
+        });
+        if code == Some(login_code::NEW_USER) && attempt == 0 {
+            s.packets.clear();
+            s.send(login(1));
+            continue;
+        }
+        break;
+    }
+    let Some(code) = code else {
+        r.fail(G, "login-response", "no S2C 0x0A login response");
+        return Ok(());
+    };
+    r.pass(G, "login-response");
+    if !matches!(
+        code,
+        login_code::OK | login_code::SPEC_ONLY | login_code::NO_SCORES
+    ) {
+        r.skip(
+            G,
+            "arena and map checks",
+            format!("login refused with code {code} (try --name/--password)"),
+        );
+        return Ok(());
+    }
+
+    // Arena entry.
+    s.packets.clear();
+    let (arena_type, arena) = match &opts.arena {
+        Some(a) => (arena_type::NAMED, FixedStr::new(a.as_bytes())),
+        None => (arena_type::ANY_PUBLIC, FixedStr::default()),
+    };
+    s.send(GoArena {
+        ship: 8,
+        allow_audio: 1,
+        obscenity_filter: 0,
+        x_res: 1024,
+        y_res: 768,
+        arena_type,
+        arena,
+        optional_graphics: None,
+    });
+    s.pump(opts.timeout, |p| matches!(p, S2CPacket::EnteringArena(_)));
+    let pos = |f: &dyn Fn(&S2CPacket) -> bool| s.packets.iter().position(|(_, p)| f(p));
+    let pid = pos(&|p| matches!(p, S2CPacket::PlayerId(_)));
+    let settings = pos(&|p| matches!(p, S2CPacket::Settings(_)));
+    let me = pos(
+        &|p| matches!(p, S2CPacket::PlayerEntering(e) if e.players.iter().any(|d| d.name.as_bytes().eq_ignore_ascii_case(name.as_bytes()))),
+    );
+    let mapname = pos(&|p| matches!(p, S2CPacket::MapFilename(_)));
+    let entered = pos(&|p| matches!(p, S2CPacket::EnteringArena(_)));
+    r.check(
+        G,
+        "arena-player-id",
+        pid.is_some(),
+        "no S2C 0x01 (your player id)",
+    );
+    r.check(
+        G,
+        "arena-settings",
+        settings.is_some(),
+        "no S2C 0x0F settings packet",
+    );
+    if let Some(i) = settings {
+        r.check(
+            G,
+            "arena-settings-size",
+            s.packets[i].0.len() == 1428,
+            format!(
+                "settings packet is {} bytes, not 1428",
+                s.packets[i].0.len()
+            ),
+        );
+    }
+    r.check(
+        G,
+        "arena-self-listed",
+        me.is_some(),
+        "no S2C 0x03 listing this player",
+    );
+    r.check(
+        G,
+        "arena-map-filename",
+        mapname.is_some(),
+        "no S2C 0x29 map file name",
+    );
+    r.check(
+        G,
+        "arena-entered",
+        entered.is_some(),
+        "no S2C 0x02 (arena entry complete)",
+    );
+    if let (Some(a), Some(b), Some(c)) = (pid, settings, entered) {
+        r.check(
+            G,
+            "arena-order",
+            a < b && b < c && me.is_none_or(|m| m < c),
+            "expected player id, settings, ..., entering arena last (reference order)",
+        );
+    }
+
+    // Map download.
+    let crc = mapname.and_then(|i| match &s.packets[i].1 {
+        S2CPacket::MapFilename(MapFilename::Single { checksum, .. }) => Some(*checksum),
+        S2CPacket::MapFilename(MapFilename::Files(f)) => f.first().map(|f| f.checksum),
+        _ => None,
+    });
+    let mut grid = None;
+    if let Some(crc) = crc {
+        s.send(MapRequest { index: None });
+        s.pump(opts.timeout * 4, |p| matches!(p, S2CPacket::MapData(_)));
+        let data = s.packets.iter().rev().find_map(|(_, p)| match p {
+            S2CPacket::MapData(m) => Some(m.data.clone()),
+            _ => None,
+        });
+        match data {
+            None => r.fail(G, "map-download", "no S2C 0x2A map data after C2S 0x0C"),
+            Some(z) => {
+                r.pass(G, "map-download");
+                match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&z, 16 << 20) {
+                    Err(_) => r.fail(G, "map-zlib", "map data is not a zlib stream"),
+                    Ok(lvl) => {
+                        r.check(
+                            G,
+                            "map-crc",
+                            crc32(&lvl) == crc,
+                            format!(
+                                "CRC-32 {:08x} does not match the 0x29 checksum {crc:08x}",
+                                crc32(&lvl)
+                            ),
+                        );
+                        match Level::parse(&lvl) {
+                            Ok(l) => {
+                                r.pass(G, "map-parses");
+                                grid = Some(l.server_tile_grid().0);
+                            }
+                            Err(e) => r.fail(G, "map-parses", format!("not a valid .lvl: {e}")),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Security: answer any checksum request correctly; the server must keep the
+    // session. Then send position updates for two seconds.
+    s.pump(
+        Duration::from_secs(2),
+        |p| matches!(p, S2CPacket::Security(x) if x.key != 0),
+    );
+    let settings_bytes = settings.map(|i| s.packets[i].0.clone()).unwrap_or_default();
+    let key = s.packets.iter().find_map(|(_, p)| match p {
+        S2CPacket::Security(x) if x.key != 0 => Some(x.key),
+        _ => None,
+    });
+    if let Some(key) = key {
+        s.send(SecurityResponse {
+            weapon_count: 0,
+            settings_checksum: settings_checksum(key, &settings_bytes),
+            exe_checksum: vie_exe_checksum(key),
+            map_checksum: grid
+                .as_ref()
+                .map_or(0, |g| map_checksum(key, |x, y| g.get(x as u32, y as u32))),
+            s2c_slow_total: 0,
+            s2c_fast_total: 0,
+            s2c_slow_current: 0,
+            s2c_fast_current: 0,
+            s2c_reliable_out: 0,
+            ping_last: 0,
+            ping_average: 0,
+            ping_low: 0,
+            ping_high: 0,
+            slow_frame: 0,
+            continuum: None,
+        });
+    } else {
+        r.skip(
+            G,
+            "security",
+            "the server sent no checksum request within 2 s",
+        );
+    }
+    for i in 0..20 {
+        let p = C2SPosition {
+            time: s.conn.server_ticks(ms(s.start)),
+            x: 512 * 16,
+            y: 512 * 16 + i,
+            ..C2SPosition::default()
+        };
+        s.conn.send(&C2SPacket::Position(p).to_bytes(), false);
+        s.pump(Duration::from_millis(100), |_| false);
+    }
+    r.check(
+        G,
+        "session-kept",
+        !s.closed,
+        "the server closed the session after security and positions",
+    );
+    s.send(c2s::LeaveArena {});
+    s.conn.disconnect();
+    s.pump(Duration::from_millis(200), |_| false);
+    Ok(())
+}
+
+// ---- client under test ---------------------------------------------------------------
+
+/// Options for [`check_client`].
+#[derive(Debug, Clone)]
+pub struct ClientOptions {
+    /// How long to wait for the client to connect.
+    pub connect_timeout: Duration,
+    /// How long to wait for each later step.
+    pub timeout: Duration,
+    /// Security checksum key sent to the client.
+    pub security_key: u32,
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(120),
+            timeout: Duration::from_secs(10),
+            security_key: 0x1234_5678,
+        }
+    }
+}
+
+/// The suite's zone side: a server with one client.
+struct Zone {
+    sock: UdpSocket,
+    server: Server<SocketAddr>,
+    start: Instant,
+    peer: Option<SocketAddr>,
+    packets: Vec<C2SPacket>,
+    first: Option<Vec<u8>>,
+    gone: bool,
+}
+
+impl Zone {
+    fn pump(&mut self, dur: Duration, mut until: impl FnMut(&C2SPacket) -> bool) -> bool {
+        let end = Instant::now() + dur;
+        let mut buf = [0u8; 2048];
+        while Instant::now() < end {
+            if let Ok((n, from)) = self.sock.recv_from(&mut buf) {
+                if self.peer.is_none() {
+                    self.peer = Some(from);
+                    self.first = Some(buf[..n].to_vec());
+                }
+                if Some(from) == self.peer {
+                    self.server.handle_datagram(ms(self.start), from, &buf[..n]);
+                }
+            }
+            self.server.tick(ms(self.start));
+            while let Some((to, d)) = self.server.poll_transmit() {
+                let _ = self.sock.send_to(&d, to);
+                self.server.recycle(d);
+            }
+            let mut hit = false;
+            while let Some((_, e)) = self.server.poll_event() {
+                match e {
+                    Event::Packet(p) => {
+                        if let Ok(pk) = C2SPacket::decode(&p) {
+                            hit |= until(&pk);
+                            self.packets.push(pk);
+                        }
+                        self.server.recycle(p);
+                    }
+                    Event::Disconnected(_) => self.gone = true,
+                    _ => {}
+                }
+            }
+            if hit || self.gone {
+                return hit;
+            }
+        }
+        false
+    }
+
+    /// Whether a packet matching `pred` has arrived, waiting up to `dur`.
+    fn wait_for(&mut self, dur: Duration, pred: impl Fn(&C2SPacket) -> bool) -> bool {
+        self.packets.iter().any(&pred) || self.pump(dur, &pred)
+    }
+
+    fn send(&mut self, p: impl Into<S2CPacket>) {
+        if let Some(peer) = self.peer {
+            self.server.send(&peer, &p.into().to_bytes(), true);
+        }
+    }
+}
+
+/// Waits for one client on `sock` and checks it: connection request, login,
+/// acknowledgements, arena entry, map download, position checksums, time sync
+/// and the security checksums.
+pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report> {
+    const G: &str = "client";
+    let mut r = Report::default();
+    sock.set_read_timeout(Some(Duration::from_millis(5)))?;
+    let mut server = Server::new(Config::server());
+    server.add_acceptor(Box::new(OpenSecAcceptor::new(None, os_entropy())));
+    server.add_acceptor(Box::new(VieAcceptor {
+        accept_continuum: false,
+    }));
+    let mut z = Zone {
+        sock,
+        server,
+        start: Instant::now(),
+        peer: None,
+        packets: Vec::new(),
+        first: None,
+        gone: false,
+    };
+    let deadline = Instant::now() + opts.connect_timeout;
+    while z.server.is_empty() && Instant::now() < deadline {
+        z.pump(Duration::from_millis(50), |_| false);
+        if let Some(f) = &z.first
+            && f.len() == 8
+            && f[..2] == [0, 1]
+            && f[6] == 0x11
+        {
+            r.skip(
+                G,
+                "all",
+                "Continuum protocol (0x11): its encryption is not part of the public suite",
+            );
+            return Ok(r);
+        }
+    }
+    let Some(peer) = z.peer else {
+        r.fail(G, "connect", "no client connected");
+        return Ok(r);
+    };
+    let first = z.first.clone().unwrap_or_default();
+    let opensec = oss_net::opensec::is_client_hello(&first);
+    r.check(
+        G,
+        "connect-request",
+        opensec || (first.len() == 8 && first[..2] == [0, 1] && first[6..] == [1, 0]),
+        format!("first datagram {first:02x?} is not 00 01 <key> 01 00 or an OpenSec hello"),
+    );
+    let deadline = Instant::now() + opts.timeout;
+    while z.server.connection(&peer).is_none_or(|c| !c.is_connected()) && Instant::now() < deadline
+    {
+        z.pump(Duration::from_millis(50), |_| false);
+    }
+    if z.server.connection(&peer).is_none_or(|c| !c.is_connected()) {
+        r.fail(G, "handshake", "the client did not complete the handshake");
+        return Ok(r);
+    }
+    r.pass(
+        G,
+        if opensec {
+            "handshake (OpenSec)"
+        } else {
+            "handshake (VIE)"
+        },
+    );
+
+    // Login.
+    let got_login = z.wait_for(opts.timeout, |p| {
+        matches!(p, C2SPacket::Login(_) | C2SPacket::ContLogin(_))
+    });
+    let login = z.packets.iter().find_map(|p| match p {
+        C2SPacket::Login(l) => Some(l.clone()),
+        C2SPacket::ContLogin(l) => Some(l.0.clone()),
+        _ => None,
+    });
+    r.check(G, "login", got_login, "no C2S 0x09/0x24 login");
+    let Some(login) = login else {
+        return Ok(r);
+    };
+    r.check(
+        G,
+        "login-name",
+        !login.name.as_bytes().is_empty(),
+        "empty name",
+    );
+    z.send(s2c::LoginResponse {
+        code: login_code::OK,
+        server_version: 134,
+        exe_checksum: 0xF142_9CE8,
+        code_checksum: 0x281C_C948,
+        ..Default::default()
+    });
+    z.pump(Duration::from_secs(1), |_| false);
+    let acked = z
+        .server
+        .connection(&peer)
+        .is_some_and(|c| c.queued_reliable() == 0);
+    r.check(
+        G,
+        "acks",
+        acked,
+        "the login response was not acknowledged within 1 s",
+    );
+
+    // Arena entry.
+    let got = z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::GoArena(_)));
+    r.check(
+        G,
+        "go-arena",
+        got,
+        "no C2S 0x01 arena request after a successful login",
+    );
+    if !got {
+        return Ok(r);
+    }
+    let settings = reference_settings();
+    let map = smallmap();
+    z.send(s2c::PlayerId {
+        pid: 0,
+        extra: None,
+    });
+    if let Some(peer) = z.peer {
+        z.server.send(&peer, &settings, true);
+    }
+    z.send(s2c::PlayerEntering {
+        players: vec![PlayerData {
+            ship: 8,
+            accept_audio: 1,
+            name: FixedStr::new(login.name.as_bytes()),
+            squad: FixedStr::default(),
+            kill_points: 0,
+            flag_points: 0,
+            pid: 0,
+            freq: 0,
+            wins: 0,
+            losses: 0,
+            attached_to: -1,
+            flags_carried: 0,
+            misc_bits: 0,
+        }],
+    });
+    z.send(MapFilename::Single {
+        name: "smallmap.lvl".into(),
+        checksum: crc32(map),
+    });
+    z.send(s2c::EnteringArena {});
+
+    // Map download (a client with the map cached may skip it).
+    if z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::MapRequest(_))) {
+        r.pass(G, "map-request");
+        z.send(s2c::MapData {
+            name: "smallmap.lvl".into(),
+            data: miniz_oxide::deflate::compress_to_vec_zlib(map, 9),
+        });
+        z.pump(Duration::from_secs(2), |_| false);
+    } else {
+        r.skip(G, "map-request", "no C2S 0x0C (map cached?)");
+    }
+
+    // Position updates with valid checksums.
+    let got = z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::Position(_)));
+    let bad = z
+        .packets
+        .iter()
+        .filter(|p| matches!(p, C2SPacket::Position(x) if !x.checksum_ok()))
+        .count();
+    r.check(G, "position", got, "no C2S 0x03 position update");
+    r.check(
+        G,
+        "position-checksum",
+        bad == 0,
+        format!("{bad} position packets with a wrong checksum"),
+    );
+
+    // Security checksums.
+    let key = opts.security_key;
+    z.send(s2c::Security {
+        green_seed: 1,
+        door_seed: 2,
+        timestamp: 0,
+        key,
+    });
+    let got = z.wait_for(opts.timeout, |p| {
+        matches!(p, C2SPacket::SecurityResponse(_))
+    });
+    let resp = z.packets.iter().find_map(|p| match p {
+        C2SPacket::SecurityResponse(s) => Some(s.clone()),
+        _ => None,
+    });
+    r.check(
+        G,
+        "security-response",
+        got,
+        "no C2S 0x1A after S2C 0x18 with a key",
+    );
+    if let Some(s) = resp {
+        let want = settings_checksum(key, &settings);
+        r.check(
+            G,
+            "security-settings-checksum",
+            s.settings_checksum == want,
+            format!("expected {want:08x}, got {:08x}", s.settings_checksum),
+        );
+        let want = vie_exe_checksum(key);
+        if opensec {
+            r.skip(
+                G,
+                "security-exe-checksum",
+                "OpenSec client (exe checksum is client-defined)",
+            );
+        } else {
+            r.check(
+                G,
+                "security-exe-checksum",
+                s.exe_checksum == want,
+                format!(
+                    "expected {want:08x} (SubSpace 1.34), got {:08x}",
+                    s.exe_checksum
+                ),
+            );
+        }
+        let grid = Level::parse(map).map(|l| l.server_tile_grid().0);
+        if s.map_checksum == 0 {
+            r.skip(
+                G,
+                "security-map-checksum",
+                "the client reported no map checksum",
+            );
+        } else if let Ok(g) = grid {
+            let want = map_checksum(key, |x, y| g.get(x as u32, y as u32));
+            r.check(
+                G,
+                "security-map-checksum",
+                s.map_checksum == want,
+                format!("expected {want:08x}, got {:08x}", s.map_checksum),
+            );
+        }
+    }
+
+    // Time sync.
+    let deadline = Instant::now() + opts.timeout;
+    while z
+        .server
+        .connection(&peer)
+        .is_some_and(|c| c.peer_counts().is_none())
+        && Instant::now() < deadline
+    {
+        z.pump(Duration::from_millis(100), |_| false);
+    }
+    r.check(
+        G,
+        "time-sync",
+        z.server
+            .connection(&peer)
+            .is_some_and(|c| c.peer_counts().is_some()),
+        "no 14-byte 00 05 time sync request",
+    );
+
+    // Done: disconnect the client.
+    z.server.disconnect(&peer);
+    while let Some((to, d)) = z.server.poll_transmit() {
+        let _ = z.sock.send_to(&d, to);
+    }
+    Ok(r)
+}

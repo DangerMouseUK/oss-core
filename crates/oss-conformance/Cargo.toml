@@ -1,0 +1,25 @@
+[package]
+name = "oss-conformance"
+description = "Conformance suite for SubSpace/Continuum protocol implementations: test vectors, a language-neutral adapter protocol, and live client/server checks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/oss-conformance"
+readme = "README.md"
+keywords = ["subspace", "continuum", "conformance", "protocol", "testing"]
+categories = ["game-development", "network-programming", "development-tools::testing"]
+
+[dependencies]
+miniz_oxide = "0.8"
+oss-formats.workspace = true
+oss-net.workspace = true
+oss-proto.workspace = true
+
+[dev-dependencies]
+oss-bot-sdk.workspace = true
+
+[lints]
+workspace = true

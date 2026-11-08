@@ -457,6 +457,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oss-conformance"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+ "oss-bot-sdk",
+ "oss-formats",
+ "oss-net",
+ "oss-proto",
+]
+
+[[package]]
 name = "oss-formats"
 version = "0.1.0"
 dependencies = [

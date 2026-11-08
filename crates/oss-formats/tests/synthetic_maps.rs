@@ -266,3 +266,31 @@ fn synthetic_elvl_contents() {
     assert_eq!(tiles.count(), 50 * 10);
     assert!(tiles.contains(100, 100) && tiles.contains(149, 109) && !tiles.contains(150, 100));
 }
+
+/// The generated maps are also published as conformance inputs
+/// (`crates/oss-conformance/vectors/synth-*.lvl`), so implementations in other
+/// languages can check their map checksum without porting the generator.
+/// Regenerate with `OSS_REGEN_VECTORS=1`; skipped when the conformance crate is
+/// not alongside.
+#[test]
+fn conformance_map_files_are_current() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../oss-conformance/vectors");
+    let regen = std::env::var_os("OSS_REGEN_VECTORS").is_some();
+    if !regen && !std::path::Path::new(dir).exists() {
+        eprintln!("skipped: {dir} not present");
+        return;
+    }
+    for name in [
+        "synth-a-plain.lvl",
+        "synth-b-edges.lvl",
+        "synth-c-elvl.lvl",
+        "synth-d-overflow.lvl",
+    ] {
+        let path = format!("{dir}/{name}");
+        let bytes = generate(name);
+        if regen {
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} is stale");
+    }
+}

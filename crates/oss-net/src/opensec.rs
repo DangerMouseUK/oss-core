@@ -22,7 +22,8 @@ use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use x25519_dalek::{PublicKey, StaticSecret};
+/// X25519 key types used by [`server_respond`] and [`client_finish`].
+pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::cipher::{Accept, Acceptor, Cipher, CipherKind, Handshake, Step};
 
@@ -171,6 +172,75 @@ pub fn client_hello(ephemeral_public: &[u8; 32], caps: u16) -> Vec<u8> {
     v.extend_from_slice(&caps.to_le_bytes());
     v.extend_from_slice(ephemeral_public);
     v
+}
+
+/// Direction of a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Direction {
+    /// Client to server.
+    ClientToServer,
+    /// Server to client.
+    ServerToClient,
+}
+
+impl Direction {
+    fn nonce_dir(self) -> u32 {
+        match self {
+            Self::ClientToServer => DIR_C2S,
+            Self::ServerToClient => DIR_S2C,
+        }
+    }
+}
+
+/// Seals one record with an explicit counter, outside any session: the wire
+/// form `0xF5 | low 32 bits of counter | ciphertext | tag`. For tests and
+/// interoperability checks; sessions use [`OpenSecCipher`].
+pub fn seal_record(key: &[u8; 32], dir: Direction, counter: u64, plaintext: &[u8]) -> Vec<u8> {
+    let aead = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
+    let mut out = Vec::with_capacity(plaintext.len() + OVERHEAD);
+    out.push(RECORD_MARKER);
+    out.extend_from_slice(&(counter as u32).to_le_bytes());
+    let header: [u8; 5] = out[..5].try_into().expect("5 bytes");
+    let mut body = plaintext.to_vec();
+    let tag = aead
+        .encrypt_inout_detached(
+            &nonce(dir.nonce_dir(), counter),
+            &header,
+            body.as_mut_slice().into(),
+        )
+        .expect("records are far below the AEAD length limit");
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&tag);
+    out
+}
+
+/// Opens one record sealed with `counter`; `None` if it is malformed, carries a
+/// different counter, or fails authentication. The counterpart of
+/// [`seal_record`].
+pub fn open_record(
+    key: &[u8; 32],
+    dir: Direction,
+    counter: u64,
+    datagram: &[u8],
+) -> Option<Vec<u8>> {
+    if datagram.len() < OVERHEAD
+        || datagram[0] != RECORD_MARKER
+        || datagram[1..5] != (counter as u32).to_le_bytes()
+    {
+        return None;
+    }
+    let aead = ChaCha20Poly1305::new_from_slice(key).expect("32-byte key");
+    let tag_at = datagram.len() - 16;
+    let tag = Tag::try_from(&datagram[tag_at..]).ok()?;
+    let mut body = datagram[5..tag_at].to_vec();
+    aead.decrypt_inout_detached(
+        &nonce(dir.nonce_dir(), counter),
+        &datagram[..5],
+        body.as_mut_slice().into(),
+        &tag,
+    )
+    .ok()?;
+    Some(body)
 }
 
 /// Whether `data` is an OpenSec client hello (any version).
@@ -853,10 +923,31 @@ mod tests {
             text,
             "OpenSec output changed; vectors differ"
         );
-        // Every record decrypts on the other side.
-        for line in text.lines().filter(|l| l.starts_with("record")) {
+        // Every record matches seal_record and opens with open_record.
+        let mut keys = (Vec::new(), Vec::new());
+        for line in text.lines() {
             let f: Vec<&str> = line.split(' ').collect();
-            assert_eq!(unhex(f[4]).len(), unhex(f[3]).len() + OVERHEAD);
+            match f[0] {
+                "key_c2s" => keys.0 = unhex(f[1]),
+                "key_s2c" => keys.1 = unhex(f[1]),
+                "record" => {
+                    let (key, dir) = if f[1] == "c2s" {
+                        (&keys.0, Direction::ClientToServer)
+                    } else {
+                        (&keys.1, Direction::ServerToClient)
+                    };
+                    let key: [u8; 32] = key.as_slice().try_into().unwrap();
+                    let counter: u64 = f[2].parse().unwrap();
+                    let (plain, wire) = (unhex(f[3]), unhex(f[4]));
+                    assert_eq!(seal_record(&key, dir, counter, &plain), wire);
+                    assert_eq!(open_record(&key, dir, counter, &wire), Some(plain.clone()));
+                    assert_eq!(open_record(&key, dir, counter + 1, &wire), None);
+                    let mut bad = wire.clone();
+                    *bad.last_mut().unwrap() ^= 1;
+                    assert_eq!(open_record(&key, dir, counter, &bad), None);
+                }
+                _ => {}
+            }
         }
     }
 }

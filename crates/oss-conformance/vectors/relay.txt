@@ -1,0 +1,16 @@
+# WebSocket relay frames (oss-relay.1, docs/protocol/websocket-relay.md). Canonical encodings.
+# frame <hex> ok      a conforming codec decodes the frame and encodes it back to the same bytes
+# frame <hex> error   a conforming codec rejects the frame
+frame 01000121436587010000 ok
+frame 0201000474657374 ok
+frame 02010000 ok
+frame 030100046a1d0100 ok
+frame 0400 ok
+frame 04037a6f6e652066756c6c ok
+frame 04047a ok
+frame 01 error
+frame 09 error
+frame 0201000561 error
+frame 02010001ff error
+frame 03010004 error
+frame 00 error
