@@ -4,6 +4,19 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-sim (server-side validation)
+- New `validate` module for anti-cheat: `check_motion(limits, map, prev, next, context, tolerance) -> MotionVerdict` asks whether a ship could have got from one reported state to the next, without stepping the world.
+  - Bounds distance, reported speed, rotation, energy, wall passes and capability status bits over the elapsed time, all conservatively. Real flight with lossy sampling must always pass: the tests fly every ship type through walls, pillars and a wormhole with random inputs.
+  - The verdict gives each quantity as a percentage of its bound, plus `findings()` and `worst()` with a rough `severity()` for trust scores.
+  - `Context` carries what the server knows happened in between: a jump it caused, a refill, a nearby repel, energy spent on weapons, and a cap on elapsed time.
+  - About 0.15 µs per call, and about 1.5 µs when the straight path crosses a wall. No allocation; integer only.
+  - Also `Limits` (from settings or a tracked loadout), `MotionMap` (once per map), `energy_bounds`, `Sample`, `Tolerance`, `Finding` and `WallCheck`.
+- New `Loadout` and `PrizeEffect`: stats, items, capabilities, gun and bomb levels, and the prize rules, without a `World`. `Loadout::spawn` replays the initial-bounty prizes from the prize seed.
+  - `World::apply_prize` and `World::reset_loadout` now use it, so there is one copy of the rules. Their behaviour is unchanged.
+- New `fire_cost(ship, Fired) -> i32` (milli-points) and `flagger_cost`, which the world's weapon code now uses too.
+- Every `ShipSettings`, `ArenaSettings`, `FlaggerSettings` and `SoccerSettings` field is documented. That includes the fire-delay units and how the delays interact.
+- Example `validate_bench`.
+
 ### oss-sim (moved here from oss-client)
 - `oss-sim`, the deterministic 100 Hz ship, weapon and collision simulation, now lives in oss-core (decision U8), so the client's prediction and the server's anti-cheat run the same physics.
   - It was imported with its history (14 commits) from oss-client.

@@ -3,104 +3,185 @@
 //! these from the server's settings packet; [`ArenaSettings::default`] holds the stock
 //! values a freshly installed zone ships with, used by the offline sandbox.
 
+#![warn(missing_docs)]
+
 /// Per-ship settings (one block per ship type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShipSettings {
     /// Ship radius in pixels (0 means the default, 14).
     pub radius: u16,
+    /// Rotation rate a ship spawns with, in 1/400 turn per second (so `r / 1000` of the
+    /// 40 directions per tick).
     pub initial_rotation: u32,
+    /// Thrust a ship spawns with: pixels/10 s of speed gained per tick.
     pub initial_thrust: u32,
+    /// Top speed a ship spawns with, in pixels/10 s.
     pub initial_speed: u32,
+    /// Recharge a ship spawns with, in energy points per 10 s.
     pub initial_recharge: u32,
+    /// Maximum energy a ship spawns with, in points.
     pub initial_energy: u32,
+    /// Highest rotation rate prizes can raise it to.
     pub maximum_rotation: u32,
+    /// Highest thrust prizes can raise it to; also the thrust while afterburning.
     pub maximum_thrust: u32,
+    /// Highest top speed prizes can raise it to; also the top speed while afterburning.
     pub maximum_speed: u32,
+    /// Highest recharge prizes can raise it to.
     pub maximum_recharge: u32,
+    /// Highest maximum energy prizes can raise it to.
     pub maximum_energy: u32,
+    /// Rotation added (or removed) by one rotation prize.
     pub upgrade_rotation: u32,
+    /// Thrust added (or removed) by one thruster prize.
     pub upgrade_thrust: u32,
+    /// Top speed added (or removed) by one top-speed prize.
     pub upgrade_speed: u32,
+    /// Recharge added (or removed) by one quick-charge prize.
     pub upgrade_recharge: u32,
+    /// Maximum energy added (or removed) by one energy prize.
     pub upgrade_energy: u32,
-    /// Energy per 10 s while afterburners are on.
+    /// Energy per 10 s while afterburners are on (and thrusting).
     pub afterburner_energy: u32,
-    /// Recoil (pixels/10 s, applied backwards) when firing a bomb.
+    /// Recoil (pixels/10 s, applied backwards after the speed clamp) when firing a
+    /// bomb.
     pub bomb_thrust: u32,
+    /// Bullet speed in pixels/10 s, added to the ship's velocity.
     pub bullet_speed: u32,
+    /// Bomb speed in pixels/10 s, added to the ship's velocity.
     pub bomb_speed: u32,
+    /// Burst shrapnel speed in pixels/10 s.
     pub burst_speed: u32,
+    /// Energy points per bullet shot, times (gun level + 1), where the level is 0..=3
+    /// as on the wire.
     pub bullet_fire_energy: u32,
+    /// Energy points per multifire shot, times (gun level + 1).
     pub multi_fire_energy: u32,
+    /// Energy points per bomb at level 0.
     pub bomb_fire_energy: u32,
+    /// Extra energy points per bomb for each bomb level.
     pub bomb_fire_energy_upgrade: u32,
+    /// Energy points per mine at level 0.
     pub landmine_fire_energy: u32,
+    /// Extra energy points per mine for each bomb level.
     pub landmine_fire_energy_upgrade: u32,
+    /// Ticks (1/100 s) after a bullet before the next gun shot. A bullet also holds
+    /// bombs and mines back until that tick (it never shortens a longer pending bomb
+    /// delay).
     pub bullet_fire_delay: u32,
+    /// Ticks after a multifire shot before the next gun shot; bombs and mines are held
+    /// back until that tick too.
     pub multi_fire_delay: u32,
+    /// Ticks after a bomb before the next bomb, mine or gun shot (plus
+    /// `Flag:FlaggerBombFireDelay` for flaggers). Bursts, thors, decoys, repels and
+    /// bricks also hold guns and bombs back this long. With `EmpBomb` set, a bomb
+    /// doesn't hold guns back.
     pub bomb_fire_delay: u32,
+    /// Ticks after a mine before the next bomb or mine; guns are held back until that
+    /// tick too.
     pub landmine_fire_delay: u32,
     /// Multifire spread in 1/111 degree.
     pub multi_fire_angle: u32,
-    /// Toggle upkeep, energy per 10 s.
+    /// Cloak upkeep, energy per 10 s.
     pub cloak_energy: u32,
+    /// Stealth upkeep, energy per 10 s.
     pub stealth_energy: u32,
+    /// Antiwarp upkeep, energy per 10 s.
     pub anti_warp_energy: u32,
+    /// X-radar upkeep, energy per 10 s.
     pub xradar_energy: u32,
-    /// Wormhole pull (0 = none) and the top speed allowed while being pulled.
+    /// Wormhole pull (0 = none; negative pushes).
     pub gravity: i32,
+    /// Top speed (pixels/10 s) allowed while a wormhole is pulling the ship.
     pub gravity_top_speed: u32,
+    /// Super prize duration: a random number of ticks below this.
     pub super_time: u32,
+    /// Shields prize duration in ticks.
     pub shields_time: u32,
+    /// Rocket duration in ticks.
     pub rocket_time: u32,
+    /// Random prizes a ship gets on spawn (drawn from the arena's prize seed).
     pub initial_bounty: u32,
+    /// Wall bounces a bomb makes before exploding on a wall.
     pub bomb_bounce_count: u8,
+    /// Shrapnel pieces in a burst.
     pub burst_shrapnel: u8,
+    /// Mines one ship may have out at once.
     pub max_mines: u8,
+    /// Most repels a ship can hold.
     pub repel_max: u8,
+    /// Most bursts a ship can hold.
     pub burst_max: u8,
+    /// Most decoys a ship can hold.
     pub decoy_max: u8,
+    /// Most thors a ship can hold.
     pub thor_max: u8,
+    /// Most bricks a ship can hold.
     pub brick_max: u8,
+    /// Most rockets a ship can hold.
     pub rocket_max: u8,
+    /// Most portals a ship can hold.
     pub portal_max: u8,
+    /// Repels a ship spawns with.
     pub initial_repel: u8,
+    /// Bursts a ship spawns with.
     pub initial_burst: u8,
+    /// Bricks a ship spawns with.
     pub initial_brick: u8,
+    /// Rockets a ship spawns with.
     pub initial_rocket: u8,
+    /// Thors a ship spawns with.
     pub initial_thor: u8,
+    /// Decoys a ship spawns with.
     pub initial_decoy: u8,
+    /// Portals a ship spawns with.
     pub initial_portal: u8,
+    /// Most shrapnel pieces per bomb.
     pub shrapnel_max: u8,
+    /// Shrapnel pieces added (or removed) by one shrapnel prize.
     pub shrapnel_rate: u8,
-    /// 0 = never, 1 = can be prized, 2 = starts with it.
+    /// Cloak: 0 = never, 1 = can be prized, 2 = starts with it.
     pub cloak_status: u8,
+    /// Stealth: 0 = never, 1 = can be prized, 2 = starts with it.
     pub stealth_status: u8,
+    /// X-radar: 0 = never, 1 = can be prized, 2 = starts with it.
     pub xradar_status: u8,
+    /// Antiwarp: 0 = never, 1 = can be prized, 2 = starts with it.
     pub anti_warp_status: u8,
-    /// Gun/bomb level (0 = none, 1..=3).
+    /// Gun level a ship spawns with (0 = none, 1..=3; the wire level is one less).
     pub initial_guns: u8,
+    /// Highest gun level prizes can raise it to (0..=3).
     pub max_guns: u8,
+    /// Bomb level a ship spawns with (0 = none, 1..=3; the wire level is one less).
     pub initial_bombs: u8,
+    /// Highest bomb level prizes can raise it to (0..=3).
     pub max_bombs: u8,
+    /// Guns fire two parallel bullets.
     pub double_barrel: bool,
+    /// Bombs are EMP bombs (they stop recharge on a hit, and don't hold guns back).
     pub emp_bomb: bool,
     /// Weapons can't be fired while afterburners are on.
     pub disable_fast_shooting: bool,
-    /// Soccer: carry time before an automatic throw (ticks, 0 = none), ball
-    /// friction, pickup distance (pixels) and fire speed (pixels per 10 s).
+    /// Soccer: ticks a ball can be carried before it is thrown automatically (0 =
+    /// forever).
     pub soccer_throw_time: u32,
+    /// Soccer: ball friction (higher slows it less).
     pub soccer_ball_friction: u32,
+    /// Soccer: distance (pixels) at which the ship picks a ball up.
     pub soccer_ball_proximity: u32,
+    /// Soccer: speed (pixels/10 s) a ball is fired at.
     pub soccer_ball_speed: u32,
-    /// Thrust and top speed lost while one or more turrets ride on the ship (once,
-    /// not per turret, as nullspace applies them).
+    /// Thrust lost while one or more turrets ride on the ship (once, not per
+    /// turret, as nullspace applies it; a rocket overrides it).
     pub turret_thrust_penalty: u32,
+    /// Top speed (pixels/10 s) lost while one or more turrets ride on the ship
+    /// (once, not per turret).
     pub turret_speed_penalty: u32,
-    /// Radar vision: mines, and bombs from this level up (0 = none, 1 = all,
+    /// Radar vision: the ship sees mines.
+    pub see_mines: bool,
+    /// Radar vision: the ship sees bombs from this level up (0 = none, 1 = all,
     /// 2 = L2 and up, 3 = L3 and up). ASSS documents 4 = L4 only, but the packet
     /// field is 2 bits wide.
-    pub see_mines: bool,
     pub see_bomb_level: u8,
 }
 
@@ -108,16 +189,19 @@ pub struct ShipSettings {
 /// `Soccer:UseFlagger` is set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlaggerSettings {
-    /// Added to thrust and top speed (may be negative).
+    /// Added to a flagger's thrust (may be negative).
     pub thrust_adjustment: i32,
+    /// Added to a flagger's top speed in pixels/10 s (may be negative).
     pub speed_adjustment: i32,
-    /// Extra bomb delay (ticks).
+    /// Extra bomb delay for flaggers (ticks).
     pub bomb_fire_delay: u32,
-    /// One gun / bomb level higher.
+    /// Flaggers' guns fire one level higher.
     pub gun_upgrade: bool,
+    /// Flaggers' bombs fire one level higher.
     pub bomb_upgrade: bool,
-    /// Weapon cost and damage taken, in 1/1000 (1000 = unchanged).
+    /// Flaggers' weapon cost in 1/1000 (1000 = unchanged).
     pub fire_cost_percent: u32,
+    /// Damage flaggers take, in 1/1000 (1000 = unchanged).
     pub damage_percent: u32,
     /// Carriers are marked on everyone's radar.
     pub on_radar: bool,
@@ -130,8 +214,9 @@ pub struct FlaggerSettings {
 pub struct SoccerSettings {
     /// Balls bounce off walls (otherwise they stop).
     pub ball_bounce: bool,
-    /// Ball carriers may fire bombs / guns (otherwise those keys shoot the ball).
+    /// Ball carriers may fire bombs (otherwise that key shoots the ball).
     pub allow_bombs: bool,
+    /// Ball carriers may fire guns (otherwise that key shoots the ball).
     pub allow_guns: bool,
     /// Ticks after a shot before anyone can catch it.
     pub pass_delay: u32,
@@ -164,48 +249,78 @@ pub const PRIZE_COUNT: usize = 28;
 /// Arena-wide settings plus the eight ship blocks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArenaSettings {
+    /// Settings for each ship type, Warbird (0) to Shark (7).
     pub ships: [ShipSettings; 8],
-    /// Wall bounce: velocity is multiplied by `16 / bounce_factor` on impact.
+    /// Wall bounce: velocity is multiplied by `16 / bounce_factor` on impact (below 16
+    /// speeds the ship up).
     pub bounce_factor: u32,
+    /// Bullet lifetime in ticks.
     pub bullet_alive_time: u32,
+    /// Bomb lifetime in ticks.
     pub bomb_alive_time: u32,
+    /// Mine lifetime in ticks.
     pub mine_alive_time: u32,
+    /// Decoy lifetime in ticks.
     pub decoy_alive_time: u32,
-    /// Damage in energy points.
+    /// Damage (energy points) of a level-0 bullet.
     pub bullet_damage_level: u32,
+    /// Extra bullet damage per gun level.
     pub bullet_damage_upgrade: u32,
+    /// Damage of a bomb at the centre of its blast.
     pub bomb_damage_level: u32,
+    /// Damage of a burst piece.
     pub burst_damage_level: u32,
+    /// Damage of shrapnel before it becomes active.
     pub inactive_shrap_damage: u32,
-    /// Shrapnel damage relative to bullets, EMP and bouncing-bomb damage (0.1%).
+    /// Shrapnel damage relative to bullets, in 0.1%.
     pub shrapnel_damage_percent: u32,
+    /// EMP bomb damage relative to normal bombs, in 0.1%.
     pub ebomb_damage_percent: u32,
+    /// Bouncing bomb damage relative to normal bombs, in 0.1%.
     pub bbomb_damage_percent: u32,
     /// Bullet damage is exact rather than randomised.
     pub exact_damage: bool,
-    /// Longest recharge stop from an EMP hit.
+    /// Longest recharge stop from an EMP hit (ticks).
     pub ebomb_shutdown_time: u32,
+    /// Bomb blast radius in pixels (per level).
     pub bomb_explode_pixels: u32,
+    /// Ticks a proximity bomb waits after triggering before it explodes.
     pub bomb_explode_delay: u32,
     /// Proximity trigger radius in tiles (plus the bomb level).
     pub proximity_distance: u32,
+    /// Proximity bombs can't be fired with an enemy already in range.
     pub bomb_safety: bool,
+    /// Shrapnel speed in pixels/10 s.
     pub shrapnel_speed: u32,
+    /// Shrapnel flies in random directions rather than evenly spread.
     pub shrapnel_random: bool,
+    /// Mines a whole frequency may have out at once.
     pub team_max_mines: u32,
+    /// Speed (pixels/10 s) a repel pushes ships and weapons away at; also the top speed
+    /// while repelled.
     pub repel_speed: u32,
+    /// Ticks a repelled ship may exceed its top speed.
     pub repel_time: u32,
+    /// Repel reach in pixels.
     pub repel_distance: u32,
+    /// Thrust while a rocket burns.
     pub rocket_thrust: u32,
+    /// Top speed (pixels/10 s) while a rocket burns.
     pub rocket_speed: u32,
+    /// Brick lifetime in ticks.
     pub brick_time: u32,
+    /// Ticks a portal stays usable.
     pub warp_point_delay: u32,
+    /// Antiwarp reach in pixels.
     pub anti_warp_pixels: u32,
     /// Ticks of fake antiwarp after warping or using a portal.
     pub anti_warp_settle_delay: u32,
+    /// Engine shutdown prize duration in ticks (three times as long for the bad
+    /// version).
     pub engine_shutdown_time: u32,
     /// Ticks a dead ship waits before respawning.
     pub enter_delay: u32,
+    /// Bounty gained per kill.
     pub bounty_increase_for_kill: u32,
     /// Door behaviour: -2 random, -1 weighted random, 0..=255 fixed door bits.
     pub door_mode: i32,
@@ -215,21 +330,29 @@ pub struct ArenaSettings {
     pub prize_weights: [u8; PRIZE_COUNT],
     /// Greens allowed per player, in 0.1% (1000 = one per player).
     pub prize_factor: u32,
+    /// Ticks between green spawn rounds.
     pub prize_delay: u32,
+    /// Greens tried per spawn round.
     pub prize_hide_count: u32,
     /// Green spawn square: `minimum_virtual + upgrade_virtual * players` tiles wide.
     pub minimum_virtual: u32,
+    /// Tiles the green spawn square grows by per player.
     pub upgrade_virtual: u32,
+    /// Longest a green lasts (ticks).
     pub prize_max_exist: u32,
+    /// Shortest a green lasts (ticks).
     pub prize_min_exist: u32,
     /// One prize in this many is negative (0 = never).
     pub prize_negative_factor: u32,
     /// Lifetime (ticks) of the green a kill leaves behind.
     pub death_prize_time: u32,
+    /// Prizes a multiprize gives.
     pub multi_prize_count: u32,
     /// Random warp/spawn distance limit from the centre (tiles).
     pub warp_radius_limit: u32,
+    /// `Flag:Flagger*` adjustments.
     pub flagger: FlaggerSettings,
+    /// `Soccer:*` ball rules.
     pub soccer: SoccerSettings,
     /// Wormholes pull bombs as well as ships.
     pub gravity_bombs: bool,

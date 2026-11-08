@@ -6,9 +6,10 @@
 //! the nullspace client (MIT).
 
 use crate::fixed::{ENERGY_SCALE, VieRng};
+use crate::loadout::{Loadout, PrizeEffect};
 use crate::map::MAP_TILES;
 use crate::settings::{ArenaSettings, PRIZE_COUNT};
-use crate::ship::{Items, Ship, ShipStats, active, cap, tick_after};
+use crate::ship::{active, tick_after};
 use crate::world::{Event, World};
 
 /// Prize ids as sent on the wire (negative ids are the "bad" version).
@@ -141,7 +142,7 @@ impl Prize {
     }
 
     /// Prizes never handed out as part of a random batch (initial bounty, multiprize).
-    const fn excluded_from_batches(self) -> bool {
+    pub(crate) const fn excluded_from_batches(self) -> bool {
         matches!(
             self,
             Prize::FullCharge
@@ -240,117 +241,20 @@ impl World {
         }
         let tick = self.tick;
         let s = self.settings.ships[self.ships[index].kind as usize];
+        let mut loadout = Loadout::of(&self.ships[index]);
+        let effect = loadout.apply(&s, prize, negative);
+        loadout.store(&mut self.ships[index]);
         let ship = &mut self.ships[index];
-
-        /// Moves a stat by `step` within `lo..=hi`.
-        fn adjust(v: &mut u32, step: u32, lo: u32, hi: u32, negative: bool) {
-            *v = if negative {
-                v.saturating_sub(step).max(lo)
-            } else {
-                (*v + step).min(hi.max(lo))
-            };
-        }
-        fn count(v: &mut u8, max: u8, negative: bool) {
-            *v = if negative {
-                v.saturating_sub(1)
-            } else {
-                v.saturating_add(1).min(max)
-            };
-        }
-        let mut full_charge = None;
-        let mut capability = |ship: &mut Ship, bit: u8, status: u8| {
-            if negative {
-                if !ship.has(bit) && status == 0 {
-                    full_charge = Some(true);
-                }
-                ship.caps &= !bit;
-            } else if status > 0 {
-                ship.caps |= bit;
-            } else {
-                full_charge = Some(false);
-            }
-        };
-
-        match prize {
-            Prize::QuickCharge => adjust(
-                &mut ship.stats.recharge,
-                s.upgrade_recharge,
-                s.initial_recharge,
-                s.maximum_recharge,
-                negative,
-            ),
-            Prize::Energy => adjust(
-                &mut ship.stats.max_energy,
-                s.upgrade_energy,
-                s.initial_energy,
-                s.maximum_energy,
-                negative,
-            ),
-            Prize::Rotation => adjust(
-                &mut ship.stats.rotation,
-                s.upgrade_rotation,
-                s.initial_rotation,
-                s.maximum_rotation,
-                negative,
-            ),
-            Prize::Thruster => adjust(
-                &mut ship.stats.thrust,
-                s.upgrade_thrust,
-                s.initial_thrust,
-                s.maximum_thrust,
-                negative,
-            ),
-            Prize::TopSpeed => adjust(
-                &mut ship.stats.speed,
-                s.upgrade_speed,
-                s.initial_speed,
-                s.maximum_speed,
-                negative,
-            ),
-            Prize::Stealth => capability(ship, cap::STEALTH, s.stealth_status),
-            Prize::Cloak => capability(ship, cap::CLOAK, s.cloak_status),
-            Prize::XRadar => capability(ship, cap::XRADAR, s.xradar_status),
-            Prize::Antiwarp => capability(ship, cap::ANTIWARP, s.anti_warp_status),
-            Prize::BouncingBullets => capability(ship, cap::BOUNCING_BULLETS, 1),
-            Prize::Multifire => capability(ship, cap::MULTIFIRE, 1),
-            Prize::Proximity => capability(ship, cap::PROXIMITY, 1),
-            Prize::Guns => {
-                ship.guns = if negative {
-                    ship.guns.saturating_sub(1).max(s.initial_guns)
-                } else {
-                    (ship.guns + 1).min(s.max_guns)
-                }
-            }
-            Prize::Bombs => {
-                ship.bombs = if negative {
-                    ship.bombs.saturating_sub(1).max(s.initial_bombs)
-                } else {
-                    (ship.bombs + 1).min(s.max_bombs)
-                }
-            }
-            Prize::Shrapnel => {
-                ship.shrapnel = if negative {
-                    ship.shrapnel.saturating_sub(s.shrapnel_rate)
-                } else {
-                    ship.shrapnel
-                        .saturating_add(s.shrapnel_rate)
-                        .min(s.shrapnel_max)
-                }
-            }
-            Prize::Repel => count(&mut ship.items.repels, s.repel_max, negative),
-            Prize::Burst => count(&mut ship.items.bursts, s.burst_max, negative),
-            Prize::Decoy => count(&mut ship.items.decoys, s.decoy_max, negative),
-            Prize::Thor => count(&mut ship.items.thors, s.thor_max, negative),
-            Prize::Brick => count(&mut ship.items.bricks, s.brick_max, negative),
-            Prize::Rocket => count(&mut ship.items.rockets, s.rocket_max, negative),
-            Prize::Portal => count(&mut ship.items.portals, s.portal_max, negative),
-            Prize::FullCharge => full_charge = Some(negative),
-            Prize::EngineShutdown => {
+        match effect {
+            PrizeEffect::None => {}
+            PrizeEffect::FullCharge => ship.energy = ship.stats.max_energy as i32 * ENERGY_SCALE,
+            PrizeEffect::DrainEnergy => ship.energy = ENERGY_SCALE,
+            PrizeEffect::EngineShutdown { negative } => {
                 let t = self.settings.engine_shutdown_time * if negative { 3 } else { 1 };
                 ship.shutdown_end_tick = tick.wrapping_add(t);
             }
-            Prize::Shields => ship.shield_end_tick = tick.wrapping_add(s.shields_time),
-            Prize::Super => {
+            PrizeEffect::Shields => ship.shield_end_tick = tick.wrapping_add(s.shields_time),
+            PrizeEffect::Super => {
                 let t = if s.super_time > 0 {
                     self.rng.next_u32() % s.super_time
                 } else {
@@ -361,46 +265,31 @@ impl World {
                     ship.super_end_tick = end;
                 }
             }
-            Prize::Warp => {
-                if negative {
-                    full_charge = Some(false);
-                } else {
-                    let mut moved = ship.clone();
-                    self.place_at_spawn(&mut moved);
-                    self.ships[index] = moved;
-                }
+            PrizeEffect::Warp => {
+                let mut moved = ship.clone();
+                self.place_at_spawn(&mut moved);
+                self.ships[index] = moved;
             }
-            Prize::Multiprize => {
-                if !negative {
-                    let saved = self.prize_seed;
-                    let mut given = 0;
-                    for _ in 0..9999 {
-                        if given >= self.settings.multi_prize_count {
-                            break;
-                        }
-                        let p = generate_prize(&mut self.prize_seed, &self.settings, false);
-                        if p <= 0
-                            || Prize::from_id(p as u8).is_none_or(Prize::excluded_from_batches)
-                        {
-                            continue;
-                        }
-                        let bounty = self.ships[index].bounty;
-                        self.apply_prize(index, p, events);
-                        self.ships[index].bounty = bounty;
-                        given += 1;
+            PrizeEffect::Multiprize => {
+                // The extra prizes are drawn from the shared seed without
+                // advancing it, each applied (and reported) as its own prize.
+                let saved = self.prize_seed;
+                let mut given = 0;
+                for _ in 0..9999 {
+                    if given >= self.settings.multi_prize_count {
+                        break;
                     }
-                    self.prize_seed = saved;
+                    let p = generate_prize(&mut self.prize_seed, &self.settings, false);
+                    if p <= 0 || Prize::from_id(p as u8).is_none_or(Prize::excluded_from_batches) {
+                        continue;
+                    }
+                    let bounty = self.ships[index].bounty;
+                    self.apply_prize(index, p, events);
+                    self.ships[index].bounty = bounty;
+                    given += 1;
                 }
+                self.prize_seed = saved;
             }
-        }
-
-        if let Some(bad) = full_charge {
-            let ship = &mut self.ships[index];
-            ship.energy = if bad {
-                ENERGY_SCALE
-            } else {
-                ship.stats.max_energy as i32 * ENERGY_SCALE
-            };
         }
         events.push(Event::PrizeTaken {
             ship: ship_id,
@@ -409,21 +298,17 @@ impl World {
     }
 
     /// Resets a ship to its spawn loadout: initial stats and items, status-2
-    /// capabilities, then `InitialBounty` random prizes. The shared prize seed is left
-    /// untouched so greens stay in sync between clients.
+    /// capabilities, then `InitialBounty` random prizes (see [`Loadout::spawn`]).
+    /// The shared prize seed is left untouched so greens stay in sync between
+    /// clients.
     pub fn reset_loadout(&mut self, index: usize) {
         let Some(ship) = self.ships.get_mut(index) else {
             return;
         };
         let s = self.settings.ships[ship.kind as usize];
-        ship.stats = ShipStats::initial(&s);
-        ship.items = Items::initial(&s);
-        ship.guns = s.initial_guns.min(s.max_guns);
-        ship.bombs = s.initial_bombs.min(s.max_bombs);
-        ship.shrapnel = 0;
+        Loadout::spawn(&s, &self.settings, self.prize_seed).store(ship);
         ship.multifire = false;
         ship.toggles = 0;
-        ship.bounty = 0;
         let now = self.tick;
         for t in [
             &mut ship.super_end_tick,
@@ -440,39 +325,6 @@ impl World {
             *t = now;
         }
         ship.portal = None;
-        ship.caps = 0;
-        for (status, bit) in [
-            (s.stealth_status, cap::STEALTH),
-            (s.cloak_status, cap::CLOAK),
-            (s.xradar_status, cap::XRADAR),
-            (s.anti_warp_status, cap::ANTIWARP),
-        ] {
-            if status == 2 {
-                ship.caps |= bit;
-            }
-        }
-
-        if self.settings.prize_weight_total() > 0 {
-            let saved = self.prize_seed;
-            let mut scratch = Vec::new();
-            let mut given = 0;
-            for _ in 0..9999 {
-                if given >= s.initial_bounty {
-                    break;
-                }
-                let p = generate_prize(&mut self.prize_seed, &self.settings, false);
-                let Some(prize) = Prize::from_id(p.clamp(0, 255) as u8) else {
-                    continue;
-                };
-                if prize.excluded_from_batches() && prize != Prize::Multiprize {
-                    continue;
-                }
-                self.apply_prize(index, p, &mut scratch);
-                given += 1;
-            }
-            self.prize_seed = saved;
-        }
-        let ship = &mut self.ships[index];
         ship.energy = ship.stats.max_energy as i32 * ENERGY_SCALE;
         ship.bounty = s.initial_bounty;
     }

@@ -190,12 +190,18 @@ impl World {
         {
             let level = (ship.guns - 1 + flag.gun_upgrade as u8).min(3);
             let multi = ship.multifire && ship.has(cap::MULTIFIRE);
-            let (delay, per) = if multi {
-                (s.multi_fire_delay, s.multi_fire_energy)
+            let delay = if multi {
+                s.multi_fire_delay
             } else {
-                (s.bullet_fire_delay, s.bullet_fire_energy)
+                s.bullet_fire_delay
             };
-            let cost = flag.cost((per * (level as u32 + 1)) as i32 * ENERGY_SCALE);
+            let cost = flag.cost(fire_cost(
+                &s,
+                Fired::Bullet {
+                    level,
+                    multifire: multi,
+                },
+            ));
             if cost < ship.energy {
                 shot = Some(Shot::Gun {
                     level,
@@ -206,10 +212,7 @@ impl World {
             }
         } else if input.mine && bomb_ready && ship.bombs > 0 {
             let level = (ship.bombs - 1 + flag.bomb_upgrade as u8).min(3);
-            let cost = flag.cost(
-                (s.landmine_fire_energy + s.landmine_fire_energy_upgrade * level as u32) as i32
-                    * ENERGY_SCALE,
-            );
+            let cost = flag.cost(fire_cost(&s, Fired::Mine { level }));
             let own = self
                 .projectiles
                 .iter()
@@ -236,10 +239,7 @@ impl World {
             }
         } else if input.bomb && bomb_ready && ship.bombs > 0 && can_fastshoot {
             let level = (ship.bombs - 1 + flag.bomb_upgrade as u8).min(3);
-            let cost = flag.cost(
-                (s.bomb_fire_energy + s.bomb_fire_energy_upgrade * level as u32) as i32
-                    * ENERGY_SCALE,
-            );
+            let cost = flag.cost(fire_cost(&s, Fired::Bomb { level }));
             let mut ok = cost < ship.energy;
             if ok && ship.has(cap::PROXIMITY) && self.settings.bomb_safety {
                 // Proximity bombs can't be fired with an enemy already in range.
@@ -1054,6 +1054,49 @@ fn move_axis(terrain: &Terrain, pr: &mut Projectile, axis: usize, walls: bool) -
     false
 }
 
+/// A weapon fired, for [`fire_cost`]. Levels are 0..=3 as on the wire (the
+/// flagger upgrade already included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fired {
+    /// Bullets (bouncing or not); `multifire` if fired in multifire mode.
+    Bullet { level: u8, multifire: bool },
+    /// A bomb (including thor-less proximity and EMP bombs).
+    Bomb { level: u8 },
+    /// A mine.
+    Mine { level: u8 },
+}
+
+/// Energy a shot costs, in milli-points, before `Flag:FlaggerFireCostPercent`:
+/// bullets `(BulletFireEnergy or MultiFireEnergy) x (level + 1)`, bombs
+/// `BombFireEnergy + BombFireEnergyUpgrade x level`, mines likewise with the
+/// landmine settings. Items (repel, burst, decoy, thor, brick, rocket, portal)
+/// cost no energy. A shot is only fired while the ship's energy is above its cost.
+pub fn fire_cost(s: &crate::settings::ShipSettings, fired: Fired) -> i32 {
+    let points = match fired {
+        Fired::Bullet { level, multifire } => {
+            let per = if multifire {
+                s.multi_fire_energy
+            } else {
+                s.bullet_fire_energy
+            };
+            per * (level.min(3) as u32 + 1)
+        }
+        Fired::Bomb { level } => {
+            s.bomb_fire_energy + s.bomb_fire_energy_upgrade * level.min(3) as u32
+        }
+        Fired::Mine { level } => {
+            s.landmine_fire_energy + s.landmine_fire_energy_upgrade * level.min(3) as u32
+        }
+    };
+    (points as i64 * ENERGY_SCALE as i64).min(i32::MAX as i64) as i32
+}
+
+/// [`fire_cost`] after `Flag:FlaggerFireCostPercent` (in tenths of a percent) for a
+/// flagger.
+pub fn flagger_cost(cost: i32, fire_cost_percent: u32) -> i32 {
+    (cost as i64 * fire_cost_percent as i64 / 1000) as i32
+}
+
 /// The `Flag:Flagger*` adjustments for one shot (all neutral when not a flagger).
 struct Flagging {
     gun_upgrade: bool,
@@ -1083,6 +1126,6 @@ impl Flagging {
 
     /// Weapon energy cost after `FlaggerFireCostPercent`.
     fn cost(&self, cost: i32) -> i32 {
-        (cost as i64 * self.cost_percent / 1000) as i32
+        flagger_cost(cost, self.cost_percent as u32)
     }
 }
