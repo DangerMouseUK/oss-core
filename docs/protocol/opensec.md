@@ -118,8 +118,8 @@ The server then derives the keys (section 4.4), sends its hello, and considers t
 ```
 ee         = X25519(ec, Es)               client side
            = X25519(es, Ec)               server side
-es_static  = X25519(ec, S) / X25519(s, Ec)   if SERVER_AUTH is selected, else empty (zero bytes)
-se         = X25519(ic, Es) / X25519(es, Ic)  if CLIENT_AUTH is selected, else empty
+es_static  = X25519(ec, S) / X25519(s, Ec)   if SERVER_AUTH is selected, else absent (contributes no bytes)
+se         = X25519(ic, Es) / X25519(es, Ic)  if CLIENT_AUTH is selected, else absent (contributes no bytes)
 transcript = SHA256(client_hello || server_hello[0 .. len − 16])
 okm        = HKDF(salt = "OpenSec v1 handshake" (20 ASCII bytes),
                   ikm  = ee || es_static || se   (32, 64 or 96 bytes),
@@ -128,6 +128,8 @@ key_c2s    = okm[0 .. 32]
 key_s2c    = okm[32 .. 64]
 confirm    = tag of Seal(key_s2c, N(2, 0), ad = transcript, plaintext = empty)
 ```
+
+An absent part is left out of `ikm` entirely; it is **not** 32 zero bytes. So `ikm` is 32 bytes for an anonymous session, 64 with one of `SERVER_AUTH` or `CLIENT_AUTH`, and 96 with both. Reading "absent" as zeros gives different keys, which shows up as a confirmation tag mismatch; the vectors' `okm` lines catch it.
 
 The transcript covers both hellos byte for byte, including the capabilities, `S`, `Ic`, the flags and the padding. Any change to either hello therefore changes both keys. The selected capabilities say which parts `ikm` has, and they are in the transcript, so the concatenation is unambiguous.
 
@@ -155,7 +157,8 @@ Datagrams that don't start with `00 02 OSEC` don't affect the handshake. The exc
 A client may keep a long-term X25519 key pair `(ic, Ic)`, generated once per installation or account. It offers it by setting `CLIENT_AUTH` and putting `Ic` at offset 42 of its hello.
 
 - **What the server learns.** If the server selects `CLIENT_AUTH`, `se` goes into the keys, and only a party holding `ic` (or `es`) can compute it. Anyone can copy someone else's `Ic` into a hello, but without `ic` they derive different keys, and their records never authenticate.
-- **When the identity counts.** `Ic` is therefore only a *claim* until the first client-to-server record authenticates. A server must not use it before then; `oss-net` reports it (`Connection::peer_key`) only from that point. In practice, read it when handling the login.
+- **When the identity counts.** `Ic` is therefore only a *claim* until the first client-to-server record authenticates. `oss-net` reports it (`Connection::peer_key`) only from that point; in practice, read it when handling the login.
+- **An unproven `Ic` must not be used for anything.** That rules out bans, rate limits, failure counters, reputation, and log lines an operator might act on. `Ic` is public and travels in the clear, so anyone can put a victim's key into any number of hellos that never authenticate. A server that counted failed handshakes against the claimed identity, or logged "identity X attempted", would let a third party get the victim banned without ever holding `ic`. Attribute failed or unproven handshakes to the source address only, if to anything.
 - **Linkability.** One key used everywhere lets every server, and every passive observer, link a player's sessions. A client that wants identities only for some zones can keep a key per zone, or per server key `S`.
 - **Losing the key** is like changing machines: the player gets a new identity.
 
@@ -261,7 +264,7 @@ accept c: highest = max(highest, c), mark c as seen
 9. **No rekeying.** Sessions last hours at most, at under 100 records per second, far from any ChaCha20-Poly1305 usage limit. Is that analysis right?
 10. **Metadata.** Lengths and timing reveal which game packets are being sent, and in practice possibly the player's actions. Padding records would cost bandwidth on a protocol that sends small packets. Is padding worth recommending?
 11. **Identity in the clear.** `Ic` is visible to passive observers, so sessions are linkable across networks and zones. Encrypting it under a key from `ee` would need it to move to a second client message, as in Noise XX, at the cost of a round trip before the server can decide. Is clear-text acceptable for a game identifier, given the per-zone key advice in section 4.6?
-12. **Implicit client proof.** `CLIENT_AUTH` proves possession of `ic` only through the first authenticated record (KK/IK-style key mixing, no signature). Is there an unknown-key-share or misbinding issue in presenting `Ic` only as part of the transcript, when the server may hold no static key at all (case `client-auth-anonymous-server`)?
+12. **Implicit client proof, and to whom.** `CLIENT_AUTH` proves possession of `ic` only through the first authenticated record (KK/IK-style key mixing, no signature). The sharp case is `CLIENT_AUTH` *without* `SERVER_AUTH` (the `client-auth-anonymous-server` vector). There, the client proves possession of `ic` to whoever answers, and nothing binds that proof to a particular server. An active attacker can therefore complete the handshake as "the server" and receive the proof. The attacker can't reuse it elsewhere, because the session keys depend on its own `es`, but it does learn that the holder of `Ic` is present. Should clients refuse to send `CLIENT_AUTH` unless `SERVER_AUTH` is selected, or unless the server key is pinned? That would mean sending `Ic` only after seeing `S`, which needs another message. Or is the misbinding harmless for a ban identifier?
 
 ## 9. Test vectors
 
@@ -288,6 +291,10 @@ Three things check the file:
 
 ## 10. Changes
 
+- **2026-11-08, review round 8 (wording only; the protocol is unchanged):**
+  - An unproven `Ic` must not be used for anything, including bans, limits, counters and logs (section 4.6).
+  - "Absent" parts of `ikm` contribute no bytes, rather than zeros (section 4.4).
+  - Question 12 now names its concrete case.
 - **2026-11-08, client identities:**
   - New capability `CLIENT_AUTH` (0x0002). The client's identity key `Ic` goes in the hello's padding, so the hello stays 90 bytes, and `se` joins the key schedule.
   - A server reports the identity only after the client's first record authenticates.

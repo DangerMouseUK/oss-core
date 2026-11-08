@@ -217,7 +217,9 @@ pub struct SessionKeys {
     /// Server-to-client key.
     pub s2c: [u8; 32],
     /// The client's identity key, when `CLIENT_AUTH` was selected. It is only
-    /// *claimed* until a record from the client authenticates under these keys.
+    /// *claimed* until a record from the client authenticates under these keys,
+    /// and an unproven claim must not be used for anything: not bans, limits,
+    /// counters or logs. Anyone can copy a victim's public key into a hello.
     pub client_identity: Option<[u8; 32]>,
 }
 
@@ -614,6 +616,11 @@ impl OpenSecAcceptor {
     /// [`Connection::peer_key`](crate::Connection::peer_key) then returns the
     /// client's key, but only after a record from the client has authenticated,
     /// so read it when handling the login, not at the `Connected` event.
+    ///
+    /// Never attribute a failed or unfinished handshake to the identity in its
+    /// hello: anyone can copy a victim's public key into hellos that never
+    /// authenticate. Count such failures against the source address, if
+    /// anything.
     pub fn with_client_identities(mut self) -> Self {
         self.caps |= CAP_CLIENT_AUTH;
         self
