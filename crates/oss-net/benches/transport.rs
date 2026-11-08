@@ -25,6 +25,7 @@ fn vie(c: &mut Criterion) {
     g.finish();
 }
 
+#[cfg(feature = "opensec")]
 /// OpenSec records at the sizes a zone sends: a lone position (16-22 bytes), a
 /// small cluster, a half-full and a full datagram.
 fn opensec(c: &mut Criterion) {
@@ -141,5 +142,8 @@ fn reliable_round_trip(c: &mut Criterion) {
     g.finish();
 }
 
+#[cfg(feature = "opensec")]
 criterion_group!(benches, vie, opensec, reliable_round_trip);
+#[cfg(not(feature = "opensec"))]
+criterion_group!(benches, vie, reliable_round_trip);
 criterion_main!(benches);

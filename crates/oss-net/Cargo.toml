@@ -42,6 +42,11 @@ criterion = { version = "0.8.2", default-features = false }
 name = "transport"
 harness = false
 
+# The soak harness compares VIE with OpenSec, so it needs the feature.
+[[example]]
+name = "soak"
+required-features = ["opensec"]
+
 
 [package.metadata.docs.rs]
 all-features = true
