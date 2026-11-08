@@ -287,7 +287,11 @@ impl Default for Tolerance {
 }
 
 /// What the server knows happened between two samples.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// There is deliberately no `Default`: build it with [`Context::new`], which
+/// takes the elapsed-time cap and starts every other field at its strict
+/// value (nothing happened), then set what the server saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Context {
     /// The ship legitimately jumped: respawn, ship or frequency change, a
     /// `?warpto`, attaching to or detaching from a turret, a Warp prize, or
@@ -324,9 +328,30 @@ pub struct Context {
     ///
     /// Don't use the server's own time between the two packets: after a lag
     /// spike, packets arrive bunched together, and their true client times are
-    /// far apart. `None` trusts the timestamps, which leaves clock checks to the
-    /// caller.
-    pub max_ticks: Option<u32>,
+    /// far apart. `u32::MAX` trusts the client's clock completely; only tests
+    /// and offline tools should pass it.
+    pub max_ticks: u32,
+    /// The ship may hold a portal: the server's tracked [`Loadout`] has
+    /// portals. A jump with the flash bit set is then explained (the client
+    /// warped to a portal it placed). Without this, the flash bit only explains
+    /// a jump that matches a warp to spawn, which needs full energy and leaves
+    /// 1 point.
+    pub portal_held: bool,
+}
+
+impl Context {
+    /// A context for a pair of samples where nothing happened in between,
+    /// with elapsed time capped at `max_ticks` (see [`ClientClock`]).
+    pub fn new(max_ticks: u32) -> Self {
+        Self {
+            jumped: false,
+            repelled: false,
+            refilled: false,
+            spent: 0,
+            max_ticks,
+            portal_held: false,
+        }
+    }
 }
 
 /// The result of [`check_motion`]: how each quantity compares with its bound
@@ -351,6 +376,10 @@ pub struct MotionVerdict {
     pub wormhole: bool,
     /// The new sample has the flash bit (warp, portal or uncloak).
     pub flash: bool,
+    /// The flash bit was backed by evidence ([`Context::portal_held`], or the
+    /// energy signature of a warp to spawn), so a jump was accepted. A flash
+    /// bit without evidence explains nothing.
+    pub flash_explained: bool,
     /// Capability status bits set without the capability.
     pub illegal_status: u8,
     /// Energy points above the most the ship could have; 0 if within.
@@ -379,9 +408,9 @@ pub enum WallCheck {
 /// One implausible aspect of a sample, from [`MotionVerdict::findings`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Finding {
-    /// The ship got further than it could have; `flash` if the sample had the
-    /// flash bit, as after a warp or portal, which the server may choose to
-    /// accept after its own checks.
+    /// The ship got further than it could have. `flash` if the sample had the
+    /// flash bit but no evidence backed it ([`MotionVerdict::flash_explained`]
+    /// is false); such a claim weighs at least as much as a wall crossing.
     Teleport {
         /// Distance as a percentage of the reachable distance.
         percent: u32,
@@ -419,9 +448,16 @@ pub enum Finding {
 impl Finding {
     /// A rough weight for a trust score: percentage points over the limit for
     /// the measured findings, 100 for a wall pass or illegal status, 200 for a
-    /// ship inside a wall.
+    /// ship inside a wall. An unexplained flash teleport weighs at least 100,
+    /// so pinning the flash bit on never lightens a finding.
     pub fn severity(&self) -> u32 {
         match *self {
+            // The client claimed a warp the evidence doesn't support: at least
+            // as serious as crossing a wall, however short the hop.
+            Finding::Teleport {
+                percent,
+                flash: true,
+            } => percent.saturating_sub(100).max(100),
             Finding::Teleport { percent, .. }
             | Finding::Speed { percent }
             | Finding::Rotation { percent } => percent.saturating_sub(100),
@@ -435,8 +471,7 @@ impl Finding {
 impl MotionVerdict {
     /// Every implausible aspect, in no particular order. Empty when plausible.
     pub fn findings(&self) -> impl Iterator<Item = Finding> + use<> {
-        let teleport = (self.distance_percent > 100 && !self.wormhole)
-            || (self.flash && self.wall == WallCheck::Blocked);
+        let teleport = self.distance_percent > 100 && !self.wormhole;
         let found = [
             teleport.then_some(Finding::Teleport {
                 percent: self.distance_percent,
@@ -448,7 +483,7 @@ impl MotionVerdict {
             (self.rotation_percent > 100).then_some(Finding::Rotation {
                 percent: self.rotation_percent,
             }),
-            (self.wall == WallCheck::Blocked && !self.flash).then_some(Finding::ThroughWall),
+            (self.wall == WallCheck::Blocked).then_some(Finding::ThroughWall),
             (self.wall == WallCheck::Inside).then_some(Finding::InsideWall),
             (self.energy_excess > 0).then_some(Finding::Energy {
                 excess: self.energy_excess,
@@ -552,30 +587,37 @@ impl ClientClock {
     }
 
     /// The most ticks a packet arriving at `server_now` can legitimately claim
-    /// after `prev_client`. `None` before the first [`observe`](Self::observe).
+    /// after `prev_client`, for [`Context::max_ticks`]. 0 before the first
+    /// [`observe`](Self::observe): forgetting to observe is strict, not lax.
     ///
     /// `slack` must cover the spread of the connection's latency, not just its
     /// jitter: a packet delivered faster than any before it leads the clock by
     /// the difference. 30 ticks (0.3 s) suits ordinary connections. A few
     /// ticks too little is a false positive; a few too many costs little.
-    pub fn max_ticks(&self, prev_client: u32, server_now: u32, slack: u32) -> Option<u32> {
-        let (c0, s0) = self.base?;
+    pub fn max_ticks(&self, prev_client: u32, server_now: u32, slack: u32) -> u32 {
+        let Some((c0, s0)) = self.base else {
+            return 0;
+        };
         let latest = server_now.wrapping_sub(s0) as i32 as i64 + self.max_lead + slack as i64;
         let prev = prev_client.wrapping_sub(c0) as i32 as i64;
-        Some((latest - prev).clamp(0, u32::MAX as i64) as u32)
+        (latest - prev).clamp(0, u32::MAX as i64) as u32
     }
 }
 
 /// Checks whether a ship could have gone from `prev` to `next`.
 ///
-/// Elapsed time comes from the samples' client timestamps (wrapping; a sample
-/// older than `prev` counts as no time at all), capped by
+/// Elapsed time comes from the samples' client timestamps (wrapping; for a
+/// sample older than `prev`, the absolute difference), capped by
 /// [`Context::max_ticks`], plus [`Tolerance::ticks`].
 ///
 /// - **Distance**: the ship moves at most `speed` (or `gravity_speed` on maps
 ///   with wormholes, or `repel_speed` when [`Context::repelled`]) plus `recoil`
-///   per tick. A longer jump is a teleport unless a
-///   wormhole was in reach or the context says the ship jumped.
+///   per tick. A longer jump is a teleport unless a wormhole was in reach, the
+///   server says the ship jumped, or the flash bit is backed by evidence.
+/// - **Flash bit**: the client sets it itself, so on its own it explains
+///   nothing. It explains a jump if [`Context::portal_held`], or if the energy
+///   matches a warp to spawn: the ship could have reached full energy, and
+///   arrived with no more than 1 point plus what it could recharge since.
 /// - **Speed**: reported velocity at most that, times the bounce gain.
 /// - **Rotation**: `rotation / 1000` directions per tick, except across a jump.
 /// - **Walls**: closed doors and bricks count as open, because the server may not
@@ -599,10 +641,8 @@ pub fn check_motion(
     let mut ticks = client_ticks.unsigned_abs();
     // The cap bounds how far a timestamp runs *ahead*; it says nothing about
     // an older packet arriving late.
-    if let Some(cap) = context.max_ticks
-        && !reordered
-    {
-        ticks = ticks.min(cap);
+    if !reordered {
+        ticks = ticks.min(context.max_ticks);
     }
     // Beyond ten minutes the bounds mean nothing anyway; the cap keeps the
     // arithmetic in range.
@@ -644,9 +684,25 @@ pub fn check_motion(
         (turned * 100 / can_turn.max(1)) as u32
     };
 
+    // The flash bit, backed by evidence: a portal the server knows the ship
+    // may hold, or the energy signature of a warp to spawn (full energy
+    // before, 1 point after plus recharge).
     let flash = next.status & STATUS_FLASH != 0;
+    let flash_explained = flash
+        && !reordered
+        && (context.portal_held || {
+            let could_be_full = *energy_bounds(limits, prev.energy, ticks, 0, context.refilled)
+                .end()
+                + tolerance.energy
+                >= limits.max_energy;
+            let recharged = limits.recharge as i64 * ticks as i64 / 1000;
+            let drained =
+                context.refilled || (next.energy as i64) <= 1 + recharged + tolerance.energy as i64;
+            could_be_full && drained
+        });
+    let jumped = context.jumped || flash_explained;
     let mut wormhole = false;
-    let wall = if context.jumped {
+    let wall = if jumped {
         WallCheck::Unchecked
     } else if distance_percent > 100 {
         // Already a teleport (unless a wormhole explains it); only report a ship
@@ -660,9 +716,9 @@ pub fn check_motion(
     } else {
         check_walls(map.map, prev, next, reach)
     };
-    let distance_percent = if context.jumped { 0 } else { distance_percent };
+    let distance_percent = if jumped { 0 } else { distance_percent };
     // A jump (respawn, warp, wormhole) faces the ship any way.
-    let rotation_percent = if context.jumped || wormhole {
+    let rotation_percent = if jumped || wormhole {
         0
     } else {
         rotation_percent
@@ -695,6 +751,7 @@ pub fn check_motion(
         wall,
         wormhole,
         flash,
+        flash_explained,
         illegal_status: next.status & CAPABILITY_STATUS & !limits.caps,
         energy_excess,
         energy_excess_percent,

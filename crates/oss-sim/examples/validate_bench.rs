@@ -62,7 +62,7 @@ fn main() {
 
     let limits = Limits::new(&settings.ships[0], &settings);
     let tolerance = Tolerance::default();
-    let context = Context::default();
+    let context = Context::new(u32::MAX);
     let mut implausible = 0;
     let mut detours = 0;
     let rounds = 200;

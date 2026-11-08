@@ -150,7 +150,7 @@ fn fly(wormhole: bool, seed: u64) -> usize {
                 spent: fired,
                 refilled: prized,
                 jumped: warped,
-                ..Context::default()
+                ..Context::new(u32::MAX)
             };
             if prized {
                 // Upgrades take effect at once and downgrades a little later
@@ -254,7 +254,7 @@ fn speedhack_and_teleport_are_found() {
         &map,
         &at(0, 8000, 8000),
         &at(10, 8100, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert!(ok.is_plausible(), "{ok:?}");
     assert!(
@@ -266,7 +266,7 @@ fn speedhack_and_teleport_are_found() {
         &map,
         &at(0, 8000, 8000),
         &at(10, 8200, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(
         fast.worst(),
@@ -280,12 +280,12 @@ fn speedhack_and_teleport_are_found() {
     // 5000 px/10 s... only partly: 5400 px/10 s gives 140 px.
     let moved = Context {
         jumped: true,
-        ..Context::default()
+        ..Context::new(u32::MAX)
     };
     assert!(check(&map, &at(0, 8000, 8000), &at(10, 8200, 8000), &moved).is_plausible());
     let repelled = Context {
         repelled: true,
-        ..Context::default()
+        ..Context::new(u32::MAX)
     };
     let v = check(&map, &at(0, 8000, 8000), &at(10, 8130, 8000), &repelled);
     assert!(v.is_plausible(), "{v:?}");
@@ -294,9 +294,9 @@ fn speedhack_and_teleport_are_found() {
     // damps, so none) plus 10 %.
     let mut next = at(10, 8050, 8000);
     next.x_speed = 4000;
-    assert!(check(&map, &at(0, 8000, 8000), &next, &Context::default()).is_plausible());
+    assert!(check(&map, &at(0, 8000, 8000), &next, &Context::new(u32::MAX)).is_plausible());
     next.x_speed = 6000;
-    let v = check(&map, &at(0, 8000, 8000), &next, &Context::default());
+    let v = check(&map, &at(0, 8000, 8000), &next, &Context::new(u32::MAX));
     assert!(
         matches!(v.worst(), Some(Finding::Speed { percent: 149 })),
         "{v:?}"
@@ -305,7 +305,7 @@ fn speedhack_and_teleport_are_found() {
     // A warp is reported with its flash bit, for the server to judge.
     let mut warped = at(10, 3000, 3000);
     warped.status = STATUS_FLASH;
-    let v = check(&map, &at(0, 8000, 8000), &warped, &Context::default());
+    let v = check(&map, &at(0, 8000, 8000), &warped, &Context::new(u32::MAX));
     assert!(matches!(
         v.worst(),
         Some(Finding::Teleport { flash: true, .. })
@@ -314,15 +314,15 @@ fn speedhack_and_teleport_are_found() {
     // A clock-skewing client gets no extra reach when the server caps elapsed
     // time.
     let capped = Context {
-        max_ticks: Some(10),
-        ..Context::default()
+        max_ticks: 10,
+        ..Context::new(u32::MAX)
     };
     assert!(
         check(
             &map,
             &at(0, 8000, 8000),
             &at(1000, 9000, 8000),
-            &Context::default()
+            &Context::new(u32::MAX)
         )
         .is_plausible()
     );
@@ -337,7 +337,7 @@ fn wormholes_explain_jumps() {
         &map,
         &at(0, 8040, 8040),
         &at(10, 1000, 15000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert!(v.wormhole && v.is_plausible(), "{v:?}");
     // Far from it, the same jump is a teleport.
@@ -345,7 +345,7 @@ fn wormholes_explain_jumps() {
         &map,
         &at(0, 4000, 4000),
         &at(10, 1000, 15000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert!(!v.wormhole && !v.is_plausible(), "{v:?}");
 }
@@ -365,7 +365,7 @@ fn passing_through_walls_is_found() {
         &map,
         &at(0, 7980, 8000),
         &at(10, 8040, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(v.wall, WallCheck::Blocked);
     assert_eq!(v.worst(), Some(Finding::ThroughWall));
@@ -376,7 +376,7 @@ fn passing_through_walls_is_found() {
         &map,
         &at(0, 7980, 8000),
         &at(10, 8040, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(v.wall, WallCheck::Detour);
     assert!(v.is_plausible());
@@ -387,7 +387,7 @@ fn passing_through_walls_is_found() {
         &map,
         &at(0, 7980, 8000),
         &at(10, 8040, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(v.wall, WallCheck::Clear);
 
@@ -397,7 +397,7 @@ fn passing_through_walls_is_found() {
         &map,
         &at(0, 7980, 8000),
         &at(10, 8008, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(v.worst(), Some(Finding::InsideWall));
 
@@ -407,7 +407,7 @@ fn passing_through_walls_is_found() {
         &map,
         &at(0, 7980, 8000),
         &at(10, 8040, 8000),
-        &Context::default(),
+        &Context::new(u32::MAX),
     );
     assert_eq!(v.wall, WallCheck::Blocked);
 }
@@ -425,9 +425,9 @@ fn energy_is_bounded() {
     let mut next = at(10, 8000, 8000);
     // 20 ticks with tolerance: up to 500 + 23 (+10).
     next.energy = 533;
-    assert!(check(&map, &prev, &next, &Context::default()).is_plausible());
+    assert!(check(&map, &prev, &next, &Context::new(u32::MAX)).is_plausible());
     next.energy = 600;
-    let v = check(&map, &prev, &next, &Context::default());
+    let v = check(&map, &prev, &next, &Context::new(u32::MAX));
     assert_eq!(
         v.worst(),
         Some(Finding::Energy {
@@ -439,7 +439,7 @@ fn energy_is_bounded() {
     next.time = 100_000;
     next.energy = 1800;
     assert!(matches!(
-        check(&map, &prev, &next, &Context::default()).worst(),
+        check(&map, &prev, &next, &Context::new(u32::MAX)).worst(),
         Some(Finding::Energy { excess: 90, .. })
     ));
 
@@ -448,7 +448,7 @@ fn energy_is_bounded() {
     next.energy = 300;
     let fired = Context {
         spent: 600,
-        ..Context::default()
+        ..Context::new(u32::MAX)
     };
     assert!(!check(&map, &prev, &next, &fired).is_plausible());
     // ... nor fire 800 points' worth from 500 in 20 ticks.
@@ -458,7 +458,7 @@ fn energy_is_bounded() {
     let refilled = Context {
         spent: 800,
         refilled: true,
-        ..Context::default()
+        ..Context::new(u32::MAX)
     };
     next.energy = 900;
     assert!(check(&map, &prev, &next, &refilled).is_plausible());
@@ -495,11 +495,11 @@ fn rotation_and_status_are_checked() {
     // 200 = a fifth of a direction per tick: 20 ticks turn 4 (+1, +10 %).
     let mut next = at(10, 8000, 8000);
     next.rotation = 5;
-    assert!(check_motion(&l, &m, &prev, &next, &Context::default(), &tol).is_plausible());
+    assert!(check_motion(&l, &m, &prev, &next, &Context::new(u32::MAX), &tol).is_plausible());
     next.rotation = 35; // also 5 the short way round
-    assert!(check_motion(&l, &m, &prev, &next, &Context::default(), &tol).is_plausible());
+    assert!(check_motion(&l, &m, &prev, &next, &Context::new(u32::MAX), &tol).is_plausible());
     next.rotation = 15;
-    let v = check_motion(&l, &m, &prev, &next, &Context::default(), &tol);
+    let v = check_motion(&l, &m, &prev, &next, &Context::new(u32::MAX), &tol);
     assert!(
         matches!(v.worst(), Some(Finding::Rotation { percent: 300 })),
         "{v:?}"
@@ -507,7 +507,7 @@ fn rotation_and_status_are_checked() {
 
     next.rotation = 0;
     next.status = 0x02 | 0x20; // cloak, in a safe zone
-    let v = check_motion(&l, &m, &prev, &next, &Context::default(), &tol);
+    let v = check_motion(&l, &m, &prev, &next, &Context::new(u32::MAX), &tol);
     assert_eq!(v.worst(), Some(Finding::Status { bits: 0x02 }));
 }
 
@@ -637,7 +637,7 @@ fn serve(
         let mut check = |from: &Sample| {
             let context = Context {
                 max_ticks: clock.max_ticks(from.time, a.at, 30),
-                ..Context::default()
+                ..Context::new(u32::MAX)
             };
             let v = check_motion(&limits, &map, from, &next, &context, &tolerance);
             findings.extend(v.findings());
@@ -690,7 +690,7 @@ fn the_clock_guard_stops_a_timestamp_jump_from_excusing_a_teleport() {
         let cap = clock.max_ticks(prev.time, 10 * k + 5, 30);
         let context = Context {
             max_ticks: cap,
-            ..Context::default()
+            ..Context::new(u32::MAX)
         };
         assert!(check_motion(&limits, &map, &prev, &next, &context, &tol).is_plausible());
         clock.observe(next.time, 10 * k + 5);
@@ -698,11 +698,11 @@ fn the_clock_guard_stops_a_timestamp_jump_from_excusing_a_teleport() {
     }
     // The cheat moves 1000 px and claims 300 extra ticks to explain it.
     let cheat = at(prev.time + 310, prev.x + 1000, 8000);
-    let trusting = check_motion(&limits, &map, &prev, &cheat, &Context::default(), &tol);
+    let trusting = check_motion(&limits, &map, &prev, &cheat, &Context::new(u32::MAX), &tol);
     assert!(trusting.is_plausible(), "the timestamp alone excuses it");
     let guarded = Context {
         max_ticks: clock.max_ticks(prev.time, 65, 30),
-        ..Context::default()
+        ..Context::new(u32::MAX)
     };
     let v = check_motion(&limits, &map, &prev, &cheat, &guarded, &tol);
     assert!(
@@ -725,7 +725,7 @@ fn a_late_burst_after_a_lag_spike_is_not_limited() {
     // time has passed since the last delivery, but the client's is right.
     let next = at(150, 8000 + 480, 8000);
     let cap = clock.max_ticks(prev.time, 205, 30);
-    assert!(cap.unwrap() >= 150);
+    assert!(cap >= 150);
     let v = check_motion(
         &limits,
         &map,
@@ -733,7 +733,7 @@ fn a_late_burst_after_a_lag_spike_is_not_limited() {
         &next,
         &Context {
             max_ticks: cap,
-            ..Context::default()
+            ..Context::new(u32::MAX)
         },
         &Tolerance::default(),
     );
@@ -755,7 +755,7 @@ fn a_moderate_speedhack_shows_over_a_second_not_per_packet() {
             &map,
             &fly(from),
             &fly(to),
-            &Context::default(),
+            &Context::new(u32::MAX),
             &tol,
         )
     };
@@ -768,4 +768,140 @@ fn a_moderate_speedhack_shows_over_a_second_not_per_packet() {
         check(0, 100).worst(),
         Some(Finding::Teleport { .. })
     ));
+}
+
+/// A ship flown in the real world: `before` ticks idle at (x, y), then the
+/// inputs of `act` for one tick, then `after` idle ticks. Returns the samples
+/// either side, with the flash bit only on the second (Continuum sends it on
+/// the first packet after a warp), and the world.
+fn around(act: ShipInput, setup: impl FnOnce(&mut World)) -> (Sample, Sample, World) {
+    let settings = arena();
+    let mut w = World::new(TileMap::empty(), settings, 9);
+    w.prize_seed = 0;
+    w.add_ship(1, 0, 0);
+    setup(&mut w);
+    for _ in 0..10 {
+        w.step(&[ShipInput::default()]);
+    }
+    let mut prev = sample(&w, 0);
+    prev.status &= !STATUS_FLASH;
+    w.step(&[act]);
+    for _ in 0..9 {
+        w.step(&[ShipInput::default()]);
+    }
+    let mut next = sample(&w, 0);
+    next.status |= STATUS_FLASH;
+    (prev, next, w)
+}
+
+fn judge(w: &World, prev: &Sample, next: &Sample, context: &Context) -> MotionVerdict {
+    let a = &w.settings;
+    let limits = Limits::new(&a.ships[0], a);
+    check_motion(
+        &limits,
+        &MotionMap::new(&w.map),
+        prev,
+        next,
+        context,
+        &Tolerance::default(),
+    )
+}
+
+#[test]
+fn an_honest_warp_to_spawn_is_explained_by_its_energy() {
+    let warp = ShipInput {
+        warp: true,
+        ..ShipInput::default()
+    };
+    let (prev, next, w) = around(warp, |w| {
+        w.ships[0].pos = Pos::from_pixels(14000, 3000);
+    });
+    assert!(
+        next.energy < 50 && prev.x == 14000,
+        "the warp happened: {next:?}"
+    );
+    let v = judge(&w, &prev, &next, &Context::new(u32::MAX));
+    assert!(v.flash_explained && v.is_plausible(), "{v:?}");
+}
+
+#[test]
+fn an_honest_portal_jump_needs_the_server_to_know_of_the_portal() {
+    let portal = ShipInput {
+        portal: true,
+        ..ShipInput::default()
+    };
+    let warp = ShipInput {
+        warp: true,
+        ..ShipInput::default()
+    };
+    // Place a portal at one spot, then warp to it from another.
+    let settings = arena();
+    let mut w = World::new(TileMap::empty(), settings, 9);
+    w.prize_seed = 0;
+    w.add_ship(1, 0, 0);
+    w.ships[0].items.portals = 1;
+    w.ships[0].pos = Pos::from_pixels(4000, 4000);
+    w.step(&[portal]);
+    for _ in 0..5 {
+        w.step(&[ShipInput::default()]);
+    }
+    w.ships[0].pos = Pos::from_pixels(12000, 12000);
+    for _ in 0..10 {
+        w.step(&[ShipInput::default()]);
+    }
+    let prev = sample(&w, 0);
+    w.step(&[warp]);
+    let mut next = sample(&w, 0);
+    next.status |= STATUS_FLASH;
+    assert!(
+        (next.x - 4000).abs() < 20,
+        "the portal jump happened: {next:?}"
+    );
+    // Full energy remains, so it doesn't look like a warp to spawn.
+    let v = judge(&w, &prev, &next, &Context::new(u32::MAX));
+    assert!(matches!(
+        v.worst(),
+        Some(Finding::Teleport { flash: true, .. })
+    ));
+    assert!(v.worst().unwrap().severity() >= 100);
+    let held = Context {
+        portal_held: true,
+        ..Context::new(u32::MAX)
+    };
+    assert!(judge(&w, &prev, &next, &held).is_plausible());
+}
+
+#[test]
+fn a_pinned_flash_bit_lightens_nothing() {
+    let wall = TileMap::from_entries((0..1024u16).map(|y| (500u16, y, 1u8))).0;
+    let map = MotionMap::new(&wall);
+    let l = limits();
+    let tol = Tolerance::default();
+    let ctx = Context::new(u32::MAX);
+    // A short hop through a wall, with and without the flash bit: the same
+    // finding and weight (review round 7, V2).
+    let prev = at(0, 7980, 8000);
+    let mut next = at(10, 8040, 8000);
+    let honest = check_motion(&l, &map, &prev, &next, &ctx, &tol);
+    next.status = STATUS_FLASH;
+    let flashed = check_motion(&l, &map, &prev, &next, &ctx, &tol);
+    assert_eq!(honest.worst(), Some(Finding::ThroughWall));
+    assert_eq!(flashed.worst(), Some(Finding::ThroughWall));
+    assert!(!flashed.flash_explained);
+    // A long jump with the flash bit but energy to spare is no warp to spawn.
+    let far = Sample {
+        status: STATUS_FLASH,
+        ..at(10, 2000, 2000)
+    };
+    let v = check_motion(
+        &l,
+        &MotionMap::new(&TileMap::empty()),
+        &prev,
+        &far,
+        &ctx,
+        &tol,
+    );
+    let worst = v.worst().unwrap();
+    assert!(matches!(worst, Finding::Teleport { flash: true, .. }));
+    assert!(worst.severity() >= 100);
 }

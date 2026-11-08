@@ -4,6 +4,18 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-sim (validation review round 7: V1, V2, V3)
+- **V1, breaking: `Context::max_ticks` is now a required `u32`, and `Context` no longer implements `Default`.**
+  - Build it with `Context::new(max_ticks)`. Every other field starts strict (nothing happened), and you then set what the server saw.
+  - `u32::MAX` trusts the client's clock, and the call site now has to say so.
+  - `ClientClock::max_ticks` returns `u32`, which is 0 before the first `observe`, so a forgotten `observe` is strict rather than lax.
+- **V2: the flash bit no longer lightens a finding.** The client sets it itself, so it explains a jump only with evidence:
+  - the new `Context::portal_held` (the tracked loadout has portals); or
+  - the energy signature of a warp to spawn: the ship could have reached full energy, and arrived with at most 1 point plus recharge since.
+
+  `MotionVerdict::flash_explained` says when that happened. Otherwise a wall crossing is `ThroughWall` (100) whatever the bit says, and a flash teleport weighs at least 100. Tests cover an honest warp to spawn and an honest portal jump in the real world, and a pinned flash bit on a short wall hop.
+- **V3:** the settings-coverage test counts and prints the `Use::Client` entries it couldn't check. With an oss-client checkout present, a missing file is a failure, not a skip. `OSS_CLIENT_DIR` names a checkout and makes checking it mandatory.
+
 ### oss-net (OpenSec client identities)
 - **New capability `CAP_CLIENT_AUTH` (0x0002)** for servers that tie bans or accounts to a key. Proposed by SERVER and specified in `docs/protocol/opensec.md` (sections 4.6 and 6, reviewer questions 11–12).
   - The client puts its long-term identity key in the hello's padding, so the hello stays 90 bytes.
