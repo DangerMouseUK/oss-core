@@ -1,0 +1,10 @@
+# Build settings for this workspace (tests, benchmarks, the soak harness and the
+# conformance binary). Consumers of the crates need the same setting in their
+# own build to get the same OpenSec speed: see docs/performance.md, "OpenSec".
+#
+# On x86, poly1305 0.9 detects AVX2 at run time, but that path is about three
+# times slower for game-sized records than its portable backend unless the whole
+# build targets AVX2. The portable backend is constant-time and is the default on
+# every other architecture.
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))']
+rustflags = ["--cfg", 'poly1305_backend="soft"']

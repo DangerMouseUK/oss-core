@@ -1,5 +1,6 @@
-//! Hot-path benchmarks: VIE encryption and a full reliable round trip (send,
-//! pack, encrypt, decrypt, deliver, ack) between a client and a server.
+//! Hot-path benchmarks: VIE and OpenSec record encryption, and a full reliable
+//! round trip (send, pack, encrypt, decrypt, deliver, ack) between a client and
+//! a server.
 //!
 //! Run with `cargo bench -p oss-net`.
 
@@ -19,6 +20,42 @@ fn vie(c: &mut Criterion) {
         });
         g.bench_function(format!("decrypt_{len}"), |b| {
             b.iter(|| cipher.decrypt(black_box(&mut buf)))
+        });
+    }
+    g.finish();
+}
+
+/// OpenSec records at the sizes a zone sends: a lone position (16-22 bytes), a
+/// small cluster, a half-full and a full datagram.
+fn opensec(c: &mut Criterion) {
+    use oss_net::Cipher;
+    use oss_net::opensec::{OpenSecCipher, SessionKeys};
+    let keys = SessionKeys {
+        transcript: [1; 32],
+        c2s: [2; 32],
+        s2c: [3; 32],
+    };
+    let mut g = c.benchmark_group("opensec");
+    for len in [16usize, 64, 256, 491] {
+        let plain = vec![0x28u8; len];
+        let mut sender = OpenSecCipher::new(&keys, true, None);
+        let mut receiver = OpenSecCipher::new(&keys, false, None);
+        let mut buf = Vec::with_capacity(576);
+        g.throughput(Throughput::Bytes(len as u64));
+        g.bench_function(format!("seal_{len}"), |b| {
+            b.iter(|| {
+                buf.clear();
+                buf.extend_from_slice(&plain);
+                sender.encrypt(black_box(&mut buf));
+            })
+        });
+        g.bench_function(format!("seal_open_{len}"), |b| {
+            b.iter(|| {
+                buf.clear();
+                buf.extend_from_slice(&plain);
+                sender.encrypt(&mut buf);
+                assert!(receiver.decrypt(black_box(&mut buf)));
+            })
         });
     }
     g.finish();
@@ -104,5 +141,5 @@ fn reliable_round_trip(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, vie, reliable_round_trip);
+criterion_group!(benches, vie, opensec, reliable_round_trip);
 criterion_main!(benches);

@@ -4,6 +4,11 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (OpenSec speed)
+- At 500 players OpenSec now costs 5.3% of a core instead of 11.5% (336 instead of 738 ns per packet). The cause was the x86 backend choice of the `poly1305` dependency: its run-time AVX2 path is about three times slower than its portable backend for game-sized records. The portable backend is selected with `--cfg poly1305_backend="soft"`.
+- This repository now sets that flag on x86 in `.cargo/config.toml`. Servers built from other repositories must set it themselves, or build with `-C target-cpu=x86-64-v3`.
+- Measurements, the remaining floor (about 0.3 µs for a small record, 1 µs for a full one) and operator guidance are in `docs/performance.md`, section "OpenSec". `cargo bench -p oss-net -- opensec` gains seal and seal+open benchmarks.
+
 ### Docs
 - `docs/protocol/verification.md` records the evidence behind every packet, transport behaviour, checksum and file format. Each item is at one of four levels:
   - **vectors**: checked byte for byte against an unmodified reference implementation;

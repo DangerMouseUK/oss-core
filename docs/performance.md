@@ -65,7 +65,7 @@ Buffers the server hands out are recycled straight back, so they stay attributed
 
 ## Results
 
-Measured on 2026-11-08: Intel Core i9-7980XE at 2.6 GHz (4 cores visible), Windows 11, Rust 1.99.1, release build, default options unless noted.
+Measured on 2026-11-08: Intel Core i9-7980XE at 2.6 GHz (4 cores visible), Windows 11, Rust 1.99.1, release build, default options unless noted. The workspace builds with the portable Poly1305 backend (see [OpenSec](#opensec)).
 
 | Players | Cipher | Server CPU (% of a core) | ns per packet | Game packets in / out per s | Datagrams out per s | Out (Mbit/s) | Server heap per player | Allocations per s |
 |---|---|---|---|---|---|---|---|---|
@@ -73,9 +73,11 @@ Measured on 2026-11-08: Intel Core i9-7980XE at 2.6 GHz (4 cores visible), Windo
 | 250 | VIE | 1.2 | 155 | 2,455 / 74,592 | 25,006 | 10.6 | 16.3 KB | 95 |
 | **500** | **VIE** | **2.9** | **184** | 4,910 / 151,348 | 49,064 | 21.7 | 16.6 KB | 145 |
 | 500 | none | 3.0 | 190 | 4,910 / 151,348 | 49,064 | 21.7 | 16.1 KB | 145 |
-| 500 | OpenSec | 11.5 | 738 | 4,909 / 151,305 | 49,007 | 30.0 | 16.3 KB | 144 |
+| 500 | OpenSec | 5.3 | 336 | 4,909 / 151,305 | 49,007 | 30.0 | 16.3 KB | 144 |
+| 500 | OpenSec, crate defaults (see below) | 11.5 | 738 | 4,909 / 151,305 | 49,007 | 30.0 | 16.3 KB | 144 |
 | 500 | VIE, no loss, jitter or churn | 2.8 | 176 | 5,008 / 154,167 | 48,412 | 22.0 | 16.5 KB | 29 |
 | 1,000 | VIE | 7.2 | 225 | 9,818 / 310,926 | 96,940 | 45.6 | 18.0 KB | 320 |
+| 1,000 | OpenSec | 12.4 | 387 | 9,816 / 310,849 | 96,934 | 61.8 | 17.6 KB | 326 |
 
 Every run lost no reliable packets.
 
@@ -83,8 +85,8 @@ The VIE and unencrypted rows differ only by measurement noise; VIE is a few XORs
 
 **Reading the numbers against the budget:**
 
-- The transport for 500 players takes about **3% of a core with VIE** and **12% with OpenSec**. That leaves most of the 20% budget for game logic with VIE, and about 8% with OpenSec.
-- OpenSec's extra cost is ChaCha20-Poly1305 over about 57,000 datagrams per second (in plus out). That is about 1.5 µs per datagram, using the portable implementation with no SIMD. It is the place to optimise if OpenSec zones get crowded. Options include batching sends per tick, or a crypto backend with SIMD.
+- The transport for 500 players takes about **3% of a core with VIE** and **5% with OpenSec**, leaving roughly 17% and 15% of the 20% budget for game logic.
+- OpenSec's extra cost is one ChaCha20-Poly1305 operation per datagram: about 57,000 a second at 500 players. See [OpenSec](#opensec).
 - Cost per packet grows slowly with player count (132 to 225 ns), mainly from cache pressure as connection state grows.
 
 **Overload.** With a reliable chat from each of 1,000 players every 10 s, every client must receive 100 reliable packets a second. Add 10% loss and 40-90 ms delay, and some links cannot keep up. The server then disconnects them with `QueueOverflow` (the `max_queue` limit), as designed: no packet is lost for players who stay connected. Command to reproduce:
@@ -103,3 +105,50 @@ The first 500-player run showed about 27,700 allocations per second where the ho
 - connections were topped up with only a few buffers, too few for bursts.
 
 The shared pool now scales with the number of connections (8 buffers each), and connections are topped up to 16. Allocations fell to under 150 per second with churn and about 30 without, and CPU dropped by about 10%.
+
+## OpenSec
+
+OpenSec seals every datagram with ChaCha20-Poly1305 (RustCrypto's `chacha20poly1305` 0.11). VIE costs a few XORs per byte, so OpenSec is the largest single cost in the transport. Benchmarks: `cargo bench -p oss-net -- opensec`.
+
+**What was checked:**
+
+- **Per-connection state is cached.** Each connection keeps one keyed cipher per direction, built at the handshake. Per datagram, only what ChaCha20-Poly1305 itself requires is derived: the nonce from the counter, a one-block Poly1305 key, the encryption and the tag.
+- **Our wrapper is cheap.** It inserts the 5-byte header, appends the tag and checks the replay window. The bare AEAD call on a 16-byte record costs 290 ns; through `OpenSecCipher` it costs 325 ns.
+- **The backend matters most.** On x86, `poly1305` 0.9 switches to an AVX2 implementation at run time. Unless the whole build targets AVX2, that path is about three times slower for game-sized records than the crate's portable backend. `chacha20` also selects AVX2 or SSE2 at run time, and its choice makes little difference at these sizes.
+
+| Seal one record (this CPU) | 16 bytes | 64 bytes | 256 bytes | 491 bytes |
+|---|---|---|---|---|
+| crate defaults (AVX2 Poly1305 chosen at run time) | 1.07 µs | 1.38 µs | 1.53 µs | 2.02 µs |
+| `--cfg poly1305_backend="soft"` (portable Poly1305) | 0.33 µs | 0.35 µs | 0.53 µs | 1.08 µs |
+| `-C target-cpu=x86-64-v3` (AVX2 at compile time) | 0.34 µs | — | — | 0.91 µs |
+
+Opening a record costs about the same as sealing it.
+
+| Whole server, 500 players | Server CPU | ns per packet |
+|---|---|---|
+| VIE | 2.8% | 178 |
+| OpenSec, crate defaults | 11.1–11.6% | 708–743 |
+| OpenSec, `--cfg poly1305_backend="soft"` | 5.3% | 336 |
+| OpenSec, `-C target-cpu=x86-64-v3` | 5.5% | 353 |
+
+**What this repository does.** `.cargo/config.toml` selects the portable Poly1305 backend on x86, so tests, benchmarks and the soak harness are built with it. That setting only applies inside this repository. Crates that depend on `oss-net` need it in their own build.
+
+**What a zone operator should do.** Build the server with one of these:
+
+- `--cfg poly1305_backend="soft"`: runs on any x86-64 CPU and is the recommended default. For example, in the server repository's `.cargo/config.toml`:
+
+  ```toml
+  [target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))']
+  rustflags = ["--cfg", 'poly1305_backend="soft"']
+  ```
+
+  (A `RUSTFLAGS` environment variable replaces config-file flags, so add it there too if you use one.)
+- `-C target-cpu=x86-64-v3`: slightly faster for full datagrams, but the binary then needs an AVX2 CPU (Intel Haswell or AMD Excavator, 2013–2015, and later).
+
+**What to expect.** With either setting, OpenSec costs about **5% of a core for 500 players** and **12% for 1,000**, against 3% and 7% for VIE, on this 2.6 GHz desktop CPU. Expect roughly proportional figures on other x86 servers. ARM servers (for example AWS Graviton) use portable Poly1305 and NEON ChaCha20 by default; they have not been measured here.
+
+**This is close to the floor** for this crate: about 0.3 µs for a small record and 1 µs for a full one. Further options, none of them done yet:
+
+- **Fewer records:** flushing every 20 ms instead of 10 ms would pack about twice as many packets into each datagram, but adds 5 ms of average delay to positions.
+- **A faster backend:** an assembly-backed crate such as `ring` or `aws-lc-rs` could replace the record cipher behind the same `Cipher` trait. It would cost portability (wasm) and add C or assembly dependencies.
+- **An upstream fix** in `poly1305`, so its run-time AVX2 path is no longer slower than the portable one.
