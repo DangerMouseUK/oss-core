@@ -1,6 +1,6 @@
 # WebSocket relay (`oss-relay.1`)
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Codec: `oss-net::relay`.
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Codec: `oss-net::relay`. Evidence for each part: [verification.md](verification.md).
 
 Browsers cannot send UDP datagrams, so a browser client can't talk to a zone directly. Instead, it opens a WebSocket to a **relay** and sends every SubSpace datagram as one WebSocket message. The relay forwards each datagram to the zone unchanged, and sends the zone's replies back the same way.
 

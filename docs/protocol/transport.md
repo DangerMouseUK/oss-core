@@ -1,6 +1,6 @@
 # Transport (core `0x00` packets)
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::control` (wire shapes) and `oss-net` (behaviour).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::control` (wire shapes) and `oss-net` (behaviour). Evidence for each part: [verification.md](verification.md).
 
 SubSpace runs over UDP. Every datagram is either a **game packet**, whose first byte is a non-zero type, or a **core packet**: `0x00` followed by a subtype byte. The core layer adds connection setup, reliable in-order delivery, packing of several packets into one datagram, transfers larger than a datagram, and clock sync. Both ends implement all of it, apart from setup, which is asymmetric.
 

@@ -1,6 +1,6 @@
 # OpenSec v1
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Reference implementation: `oss-net::opensec`. Test vectors: `crates/oss-net/tests/vectors/opensec.txt`.
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Reference implementation: `oss-net::opensec`. Test vectors: `crates/oss-net/tests/vectors/opensec.txt`. Evidence for each part: [verification.md](verification.md).
 
 OpenSec is a modern replacement for the VIE and Continuum ciphers, built from standard primitives:
 

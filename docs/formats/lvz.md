@@ -1,6 +1,6 @@
 # `.lvz` archives
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats::lvz` and `oss-proto::objects`.
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats::lvz` and `oss-proto::objects`. Evidence: [verification.md](../protocol/verification.md#file-formats-formats).
 
 Little-endian throughout.
 

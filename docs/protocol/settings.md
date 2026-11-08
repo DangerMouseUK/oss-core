@@ -1,6 +1,6 @@
 # Arena settings packet (S2C `0x0F`)
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::settings` (`ClientSettings`).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::settings` (`ClientSettings`). Evidence for each part: [verification.md](verification.md).
 
 The packet is 1428 bytes and little-endian throughout.
 

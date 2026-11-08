@@ -1,6 +1,6 @@
 # Replay files (`.ossr`)
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats::replay`.
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats::replay`. Evidence: [verification.md](../protocol/verification.md#file-formats-formats).
 
 A replay records the game packets a client received, and optionally the ones it sent, with timestamps. It also holds the metadata and the map/LVZ files needed to play the recording back on another machine. Playback feeds the recorded server packets, at their times, to the same code that handles a live connection.
 

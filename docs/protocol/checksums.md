@@ -1,6 +1,6 @@
 # Checksums and the game RNG
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::checksum` and `oss-proto::rng`.
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-proto::checksum` and `oss-proto::rng`. Evidence for each part: [verification.md](verification.md).
 
 ## File checksums
 

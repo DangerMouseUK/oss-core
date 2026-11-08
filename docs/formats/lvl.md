@@ -1,6 +1,6 @@
 # `.lvl` level files and eLVL metadata
 
-Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats` (`lvl`, `elvl`, `region` modules).
+Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented in `oss-formats` (`lvl`, `elvl`, `region` modules). Evidence: [verification.md](../protocol/verification.md#file-formats-formats).
 
 All integers are little-endian.
 

@@ -4,6 +4,15 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### Docs
+- `docs/protocol/verification.md` records the evidence behind every packet, transport behaviour, checksum and file format. Each item is at one of four levels:
+  - **vectors**: checked byte for byte against an unmodified reference implementation;
+  - **sources**: agrees with the reference server and at least one other source;
+  - **partly inferred**: the fields of unknown meaning are named;
+  - **project spec**.
+- Every protocol and format page links to it.
+- The packet tables already covered every implemented packet. Writing this page also resolved a naming conflict: S2C `0x1A` is a score reset (the client handler table and Subspace Server .NET), although ASSS names the constant `TIMEDGAME`.
+
 ### oss-conformance (new crate, MIT)
 - A conformance suite any implementation can run (`docs/conformance.md`). The `oss-conformance` binary has three modes:
   - `vectors`: 3,725 offline checks from the published vectors, run through a line-based stdin/stdout adapter written in any language. They cover VIE, the exe/position/settings/map checksums, the settings layout of 1,692 keys, OpenSec, canonical encodings of every S2C/C2S/core packet, and relay frames.
