@@ -12,7 +12,7 @@ Shared Rust crates for Open SubSpace (a SubSpace/Continuum-compatible client and
 - Decoders never panic on untrusted input; return `Result`. Fuzz-friendly APIs (`&[u8]` in, typed value out).
 - Every packet type gets a round-trip test; every cipher gets fixed test vectors.
 - Wire layout is little-endian and byte-exact; document each packet in `docs/protocol/` in your own words when you implement it.
-- No game assets, captures, personal data or machine-specific paths in the repo. Synthetic test data only.
+- Prefer synthetic test data. Small default maps (e.g. `tests/fixtures/smallmap.lvl`, from the GPL ASSS sample zone) may be committed as fixtures. Never commit `Continuum.exe` or its DLLs, third-party zone downloads, captures, personal data or machine-specific paths.
 - Keep dependencies few and permissive (`cargo deny check` must pass).
 - Before committing: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
 - Commits: imperative subject, small and focused.
