@@ -177,7 +177,7 @@ fn generate(name: &str) -> Vec<u8> {
         "synth-b-edges.lvl" => map_b(),
         "synth-c-elvl.lvl" => map_c(),
         "synth-d-overflow.lvl" => map_d(),
-        "smallmap.lvl" => include_bytes!("fixtures/smallmap.lvl").to_vec(),
+        "smallmap.lvl" => smallmap().expect("smallmap.lvl fixture"),
         other => panic!("no generator for {other}"),
     }
 }
@@ -246,8 +246,22 @@ fn synthetic_map_vectors() {
     assert_eq!(n, 132);
 }
 
+/// The reference server's sample map, a fixture in the repository. Published
+/// crates leave it out (it is GPL sample data), so the test skips without it.
+fn smallmap() -> Option<Vec<u8>> {
+    std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/smallmap.lvl"
+    ))
+    .ok()
+}
+
 #[test]
 fn smallmap_vectors() {
+    if smallmap().is_none() {
+        eprintln!("skipped: tests/fixtures/smallmap.lvl not present (excluded from the package)");
+        return;
+    }
     let n = check(
         include_str!("vectors/map-checksum.txt"),
         Some("smallmap.lvl"),

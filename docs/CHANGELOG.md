@@ -4,6 +4,14 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### Packaging (M7 groundwork)
+- The published crates no longer contain `smallmap.lvl`, the reference server's GPL sample map:
+  - `oss-formats` excludes `tests/fixtures`, and its test skips when the fixture is absent;
+  - `oss-conformance` drops the map and its 34 checks (3,715 vector checks remain) and serves its own seeded synthetic map (`synth-a-plain.lvl`) in the live client checks.
+
+  The repository's own tests still check `smallmap.lvl`.
+- New `docs/implementing-a-client.md`: a step-by-step guide for outsiders, from connecting to answering security checks to checking a client with the conformance suite. The README now has a "Getting started" section.
+
 ### oss-conformance (billing mode)
 - New mode `oss-conformance biller --bind ADDR [--zone HOST:PORT]`: the suite acts as an SSC billing server and checks the zone's billing client.
   - Checks: the connect packet and the optional capabilities announcement.

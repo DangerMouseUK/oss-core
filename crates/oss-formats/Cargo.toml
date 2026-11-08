@@ -9,6 +9,9 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/oss-formats"
 readme = "README.md"
+# ASSS's sample map is GPL data: kept in the repository for tests, left out
+# of the published crate.
+exclude = ["tests/fixtures"]
 keywords = ["subspace", "continuum", "gamedev", "map", "replay"]
 categories = ["game-development", "parser-implementations", "no-std"]
 

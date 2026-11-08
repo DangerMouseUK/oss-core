@@ -118,31 +118,6 @@ fn vector_copies_match_their_sources() {
             "{name} differs from {src}"
         );
     }
-    if let Ok(original) = std::fs::read(format!("{root}/oss-formats/tests/fixtures/smallmap.lvl")) {
-        let copy = vectors::MAPS
-            .iter()
-            .find(|(n, _)| *n == "smallmap.lvl")
-            .unwrap()
-            .1;
-        assert_eq!(original, copy);
-    }
-    // The smallmap checksums are the smallmap block of the full map vectors.
-    if let Ok(full) =
-        std::fs::read_to_string(format!("{root}/oss-formats/tests/vectors/map-checksum.txt"))
-    {
-        let copy = vectors::FILES
-            .iter()
-            .find(|(n, _)| *n == "map-checksum-smallmap.txt")
-            .unwrap()
-            .1;
-        let full = norm(full);
-        for line in copy.lines().filter(|l| !l.starts_with('#')) {
-            assert!(
-                full.lines().any(|l| l == line),
-                "{line} not in map-checksum.txt"
-            );
-        }
-    }
 }
 
 #[test]
@@ -238,7 +213,7 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>, population: Arc<std::sync::atomi
                     );
                     reply(
                         MapFilename::Single {
-                            name: "smallmap.lvl".into(),
+                            name: "synth-a-plain.lvl".into(),
                             checksum: crc32(map),
                         }
                         .into(),
@@ -248,7 +223,7 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>, population: Arc<std::sync::atomi
                 Ok(C2SPacket::MapRequest(_)) => {
                     reply(
                         s2c::MapData {
-                            name: "smallmap.lvl".into(),
+                            name: "synth-a-plain.lvl".into(),
                             data: miniz_oxide::deflate::compress_to_vec_zlib(map, 9),
                         }
                         .into(),

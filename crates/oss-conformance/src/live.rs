@@ -39,9 +39,13 @@ fn reference_settings() -> Vec<u8> {
         .unwrap_or_default()
 }
 
-fn smallmap() -> &'static [u8] {
+/// The map the suite's zone serves: one of the project's seeded synthetic maps
+/// (no third-party data), whose checksums are in the vectors.
+const SERVED_MAP: &str = "synth-a-plain.lvl";
+
+fn served_map() -> &'static [u8] {
     MAPS.iter()
-        .find(|(n, _)| *n == "smallmap.lvl")
+        .find(|(n, _)| *n == SERVED_MAP)
         .map(|(_, b)| *b)
         .unwrap_or(&[])
 }
@@ -979,7 +983,7 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
         return Ok(r);
     }
     let settings = reference_settings();
-    let map = smallmap();
+    let map = served_map();
     z.send(s2c::PlayerId {
         pid: 0,
         extra: None,
@@ -1005,7 +1009,7 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
         }],
     });
     z.send(MapFilename::Single {
-        name: "smallmap.lvl".into(),
+        name: SERVED_MAP.into(),
         checksum: crc32(map),
     });
     z.send(s2c::EnteringArena {});
@@ -1014,7 +1018,7 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
     if z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::MapRequest(_))) {
         r.pass(G, "map-request");
         z.send(s2c::MapData {
-            name: "smallmap.lvl".into(),
+            name: SERVED_MAP.into(),
             data: miniz_oxide::deflate::compress_to_vec_zlib(map, 9),
         });
         z.pump(Duration::from_secs(2), |_| false);

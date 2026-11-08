@@ -6,7 +6,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 
 | Part | Command | What it checks |
 |---|---|---|
-| Vectors | `oss-conformance vectors -- <your adapter>` | 3,749 offline checks from published test vectors |
+| Vectors | `oss-conformance vectors -- <your adapter>` | 3,715 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
 | Live directory | `oss-conformance directory --bind ADDR` | a zone's directory registration, with the suite acting as a directory server |
 | Live billing | `oss-conformance biller --bind ADDR [--zone HOST:PORT]` | a zone's SSC billing client, with the suite acting as the billing server |
@@ -54,8 +54,8 @@ A minimal adapter can therefore answer `unsupported` to everything and add comma
 | `checksum.s2c_weapon <packet>` | the correct checksum byte (offset 12) | 40 S2C `0x05` packets |
 | `checksum.settings <key> <settings packet>` | settings checksum | 2 packets × 7 keys, reference server |
 | `settings.locate <Section:Key>` | every location of the key in the settings packet, as `bitoffset:bitlength`, space-separated | 1,692 keys from 2 configurations, reference server |
-| `checksum.crc32 <bytes>` | CRC-32 (the S2C `0x29` map checksum) | 5 maps |
-| `checksum.map <key> <.lvl file>` | security map checksum | 5 maps, 165 keys, reference server |
+| `checksum.crc32 <bytes>` | CRC-32 (the S2C `0x29` map checksum) | 4 maps |
+| `checksum.map <key> <.lvl file>` | security map checksum | 4 seeded synthetic maps, 132 keys, reference server |
 | `opensec.client_hello <ephemeral secret> <caps>` | client hello | OpenSec |
 | `opensec.server_hello <ephemeral secret> <static secret or -> <caps> <client hello>` | server hello | OpenSec |
 | `opensec.client_keys <ephemeral secret> <client hello> <server hello>` | `<c2s key> <s2c key>` | OpenSec |
@@ -168,14 +168,14 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `security-response` | S2C `0x18` with a key gets C2S `0x1A` |
 | `security-settings-checksum` | correct for the settings packet the suite sent (the reference server's) |
 | `security-exe-checksum` | the SubSpace 1.34 value. Skipped for OpenSec clients |
-| `security-map-checksum` | correct for the map the suite served (`smallmap.lvl`). Skipped if the client reports 0 |
+| `security-map-checksum` | correct for the map the suite served (`synth-a-plain.lvl`, a seeded synthetic map). Skipped if the client reports 0 |
 | `time-sync` | the client sends a 14-byte `00 05` time sync request |
 
 ## Verified results
 
 | Implementation | Vectors | Live |
 |---|---|---|
-| oss-core (reference adapter, in process and as a child process) | 3,749 pass | — |
+| oss-core (reference adapter, in process and as a child process) | 3,715 pass | — |
 | `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 15 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
 | `oss-server` (bundled default zone, 2026-11-08) | — | 28 pass, 1 skipped: it sent no security request within 2 s. Directory registration not yet implemented |

@@ -26,10 +26,6 @@ pub const FILES: &[(&str, &str)] = &[
         include_str!("../vectors/clientset-subgame-svs.txt"),
     ),
     (
-        "map-checksum-smallmap.txt",
-        include_str!("../vectors/map-checksum-smallmap.txt"),
-    ),
-    (
         "map-checksum-synthetic.txt",
         include_str!("../vectors/map-checksum-synthetic.txt"),
     ),
@@ -45,7 +41,6 @@ pub const FILES: &[(&str, &str)] = &[
 
 /// Embedded map files used by the map checksum vectors.
 pub const MAPS: &[(&str, &[u8])] = &[
-    ("smallmap.lvl", include_bytes!("../vectors/smallmap.lvl")),
     (
         "synth-a-plain.lvl",
         include_bytes!("../vectors/synth-a-plain.lvl"),
@@ -143,7 +138,6 @@ pub fn cases() -> Vec<Case> {
     position(&mut v);
     settings(&mut v, "clientset-asss-public.txt", "asss-public");
     settings(&mut v, "clientset-subgame-svs.txt", "subgame-svs");
-    maps(&mut v, "map-checksum-smallmap.txt");
     maps(&mut v, "map-checksum-synthetic.txt");
     opensec(&mut v);
     packets(&mut v);
