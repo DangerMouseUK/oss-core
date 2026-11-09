@@ -6,7 +6,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|
 | Direction | both directions (transport layer) |
 | Type | `00 02` |
-| Length | 6 or 7 bytes |
+| Length | 6 or 7; 7 or 139 for Continuum bytes |
 | oss-proto | `CorePacket::ConnectResponse` |
 | Evidence | **Vectors** |
 | Conformance | 18 vectors in [`oss-conformance`](../../conformance.md) |
@@ -17,11 +17,17 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|---|---|---|
 | 0 | 1 | u8 | core | `0x00` |
 | 1 | 1 | u8 | subtype | `0x02` |
-| 2 | 4 | u32 | key | Server key: the negated client key for VIE, the client key itself for no encryption |
-| 6 | 1 | u8 | extra | Optional; ignored |
+| 2 | 4 | u32 | key | Server key: the negated client key for VIE, the client key itself for no encryption; 0 in the Continuum form |
+| 6 | 1 | u8 | extra | VIE: optional, ignored. Continuum: a flag byte |
+| 7 | 128 | bytes | identity | Continuum, 139-byte form only: the biller's SSC id (B2S `0x33`) |
+| 135 | 4 | u32 | identity_value | Continuum, 139-byte form only: the biller's rotating identity value |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
+## Notes
+
+On a VIE link this packet ends the handshake and is never encrypted. The Continuum handshake also ends with it, after `00 10` and `00 11`, but encrypted: 7 bytes from a zone with no biller identity, 139 when the zone passes on the identity its biller sent in B2S `0x33`, which the client checks and to which Continuum password hashes are keyed. oss-core's codec reads the key and the byte after it; the identity is opaque here and not decoded.
+
 ## Evidence
 
-**Vectors.** 16 key exchanges from the reference server's VIE module, including the edge-case keys (`vie.txt`). See [verification.md](../verification.md) for the levels.
+**Vectors.** 16 key exchanges from the reference server's VIE module, including the edge-case keys (`vie.txt`). The 139-byte Continuum form is from the QS protocol reference (poid.be/subspace/protocols); the 7-byte one has been seen from a real server. See [verification.md](../verification.md) for the levels.

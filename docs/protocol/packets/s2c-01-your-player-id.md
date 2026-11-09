@@ -6,7 +6,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|
 | Direction | server → client |
 | Type | `0x01` |
-| Length | 3 or 4 bytes |
+| Length | 3, or 4 to 19 bytes |
 | oss-proto | `s2c::PlayerId` |
 | Evidence | **Partly inferred** |
 | Conformance | 2 vectors in [`oss-conformance`](../../conformance.md) |
@@ -17,14 +17,14 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x01` |
 | 1 | 2 | i16 | pid | Your player id. |
-| 3 | 1 | u8 | extra | Optional; meaning unknown. |
+| 3 | n | char[] | arena | Optional: the arena's name and its NUL |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
 ## Notes
 
-First packet of the arena entry sequence.
+First packet of the arena entry sequence; the client treats it as a reset of arena state. The reference server sends the 3-byte form. Anything after the id is the arena's name: Continuum treats the packet's last byte as the terminator whatever it holds, so 4 bytes is an empty name, and it drops a packet longer than 19 bytes, so names are at most 15 bytes. Continuum looks for files in a folder named after the arena before the zone's own folder, and saves and restores ships (`AllowSavedShips`) only while the name is empty, i.e. in a public arena. The 3-byte form leaves it with the name it asked for in C2S `0x01`, which is wrong when the server placed the player somewhere else. oss-server sends the 3-byte form, as the reference server does.
 
 ## Evidence
 
-**Partly inferred.** Layout from sources; the optional trailing byte's meaning is unknown and kept as `extra`. See [verification.md](../verification.md) for the levels.
+**Partly inferred.** The 3-byte form from the reference server and Subspace Server .NET. The name form and Continuum's handling of it are from the QS protocol reference (poid.be/subspace/protocols) and are not yet checked here. Round-trip and property tests in oss-core. See [verification.md](../verification.md) for the levels.

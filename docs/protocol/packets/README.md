@@ -138,7 +138,7 @@ See [verification.md](../verification.md). This project's own protocols have the
 | `0x03` | [server disconnect](s2b-03-server-disconnect.md) | Sources |
 | `0x04` | [user login](s2b-04-user-login.md) | Vectors |
 | `0x05` | [user logoff](s2b-05-user-logoff.md) | Vectors |
-| `0x06` | [remote zone message](s2b-06-remote-zone-message.md) | Sources |
+| `0x06` | [remote zone message or permit](s2b-06-remote-zone-message-or-permit.md) | Sources |
 | `0x07` | [remote private](s2b-07-remote-private.md) | Vectors |
 | `0x08` | [request file](s2b-08-request-file.md) | Sources |
 | `0x0D` | [demographics](s2b-0d-demographics.md) | Vectors |
@@ -157,7 +157,7 @@ See [verification.md](../verification.md). This project's own protocols have the
 |---|---|---|
 | `0x01` | [login response](b2s-01-login-response.md) | Vectors |
 | `0x02` | [shut down the zone](b2s-02-shut-down-the-zone.md) | Sources |
-| `0x03` | [zone message](b2s-03-zone-message.md) | Vectors |
+| `0x03` | [zone message or permit](b2s-03-zone-message-or-permit.md) | Vectors |
 | `0x04` | [recycle the zone](b2s-04-recycle-the-zone.md) | Sources |
 | `0x05` | [file](b2s-05-file.md) | Sources |
 | `0x08` | [kick](b2s-08-kick.md) | Vectors |

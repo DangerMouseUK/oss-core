@@ -183,7 +183,7 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>, population: Arc<std::sync::atomi
                     reply(
                         s2c::PlayerId {
                             pid: 1,
-                            extra: None,
+                            arena: None,
                         }
                         .into(),
                     );

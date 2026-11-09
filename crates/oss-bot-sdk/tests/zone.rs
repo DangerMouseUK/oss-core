@@ -90,7 +90,7 @@ impl Zone {
             C2SPacket::GoArena(_) => {
                 self.send(s2c::PlayerId {
                     pid: BOT,
-                    extra: None,
+                    arena: None,
                 });
                 let settings = self.settings.clone();
                 self.server.send(&0, &settings, true);

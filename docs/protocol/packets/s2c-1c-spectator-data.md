@@ -23,7 +23,7 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 ## Notes
 
-The length selects the form.
+The length selects the form. Continuum accepts only the 2-byte form, and no known server sends the 3-byte one (per the QS protocol reference (poid.be/subspace/protocols)); oss-core decodes it, but nothing should send it.
 
 ## Evidence
 

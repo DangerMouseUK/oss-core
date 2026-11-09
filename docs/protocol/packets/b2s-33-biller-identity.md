@@ -6,7 +6,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|
 | Direction | billing server → zone |
 | Type | `0x33` |
-| Length | 1 or more bytes |
+| Length | 1 or more; 133 in full bytes |
 | oss-proto | `BillerToServer::Identity` |
 | Evidence | **Sources** |
 | Conformance | not in the offline vectors |
@@ -16,14 +16,15 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Offset | Size | Type | Field | Meaning |
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x33` |
-| 1 | n | bytes | data | Read to the end of the packet |
+| 1 | 128 | bytes | ssc_id | Opaque; present when the packet is at least 129 bytes |
+| 129 | 4 | u32 | identity_value | Rotating value; present when the packet is at least 133 bytes |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
 ## Notes
 
-The reference server keeps at most 256 bytes; other sources mention 128.
+`BillingIdentity::parse` splits the payload; the variant keeps it raw. An SSC biller sends the full form after ServerConnect and whenever the value rotates, and keeps the previous value valid for a while so logins in flight still verify. Continuum clients key their password hash (S2B `0x04`) to it, and the zone hands it to them in the Continuum form of core `00 02`. Billers also send it to every zone on a timer (60 s in one implementation) as a keepalive, because the zone's ping (S2B `0x01`) has no reply; those forms may be 1 or 129 bytes. Bytes past 133 are ignored. The reference server keeps up to 256 bytes raw.
 
 ## Evidence
 
-**Sources.** The reference server's `B2S_BillingIdentity` struct and handler and the billing protocol write-up; not among the compiled vectors. See [verification.md](../verification.md) for the levels.
+**Sources.** The reference server's `B2S_BillingIdentity` struct and handler and the billing protocol write-up; the field split and its uses are from the QS protocol reference (poid.be/subspace/protocols). Not among the compiled vectors. See [verification.md](../verification.md) for the levels.

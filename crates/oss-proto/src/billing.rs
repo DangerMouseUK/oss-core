@@ -125,6 +125,40 @@ pub struct BillerLogin {
     pub score: Option<PlayerScore>,
 }
 
+/// The `kind` byte that turns S2B `0x06` and B2S `0x03` into a permit entry: a
+/// player name with no sound byte in front of it. Every other value is a message
+/// (`0x02` in practice) with a sound byte, then the text.
+pub const PERMIT_KIND: u8 = 0x01;
+
+/// B2S `0x33` split into its parts. The packet is a 128-byte SSC id, then a `u32`
+/// identity value the biller rotates (SSC billers use it to key Continuum
+/// password hashes, so a zone hands it on to its Continuum clients). Billers also
+/// send short forms, often as a keepalive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillingIdentity {
+    /// The SSC id, when the payload holds at least 128 bytes.
+    pub id: Option<[u8; Self::ID_LEN]>,
+    /// The rotating identity value, when 4 more bytes follow the id.
+    pub value: Option<u32>,
+}
+
+impl BillingIdentity {
+    /// Size of the SSC id.
+    pub const ID_LEN: usize = 128;
+
+    /// Splits a `0x33` payload (the bytes after the type byte, as held by
+    /// [`BillerToServer::Identity`]). Bytes past the value are ignored.
+    pub fn parse(payload: &[u8]) -> Self {
+        let id = payload
+            .get(..Self::ID_LEN)
+            .map(|b| <[u8; Self::ID_LEN]>::try_from(b).expect("128 bytes"));
+        let value = payload
+            .get(Self::ID_LEN..Self::ID_LEN + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        Self { id, value }
+    }
+}
+
 /// Packets from the zone to the biller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -168,7 +202,8 @@ pub enum ServerToBiller {
         /// ends after the loss counters, 15 bytes).
         score: Option<PlayerScore>,
     },
-    /// `0x06`: a message for another zone.
+    /// `0x06`: a message for another zone. A `kind` of
+    /// [`PERMIT_KIND`] is decoded as [`ServerToBiller::RemotePermit`] instead.
     RemoteZoneMessage {
         /// Sender.
         connection_id: u32,
@@ -180,6 +215,17 @@ pub enum ServerToBiller {
         sound: u8,
         /// Text.
         text: Vec<u8>,
+    },
+    /// `0x06` with kind [`PERMIT_KIND`]: asks the biller to tell the zone whose
+    /// server id is `server_id` to add `name` to its permit list. This layout has
+    /// no sound byte.
+    RemotePermit {
+        /// Sender (not interpreted by billers).
+        connection_id: u32,
+        /// Server id of the zone that should receive the permit.
+        server_id: u32,
+        /// Player name.
+        name: Vec<u8>,
     },
     /// `0x07`: a remote private message (`:name:(from)>text` or `:#squad:...`).
     UserRemotePrivate {
@@ -289,7 +335,8 @@ pub enum BillerToServer {
     /// `0x02`: shut the zone down.
     Shutdown,
     /// `0x03`: a zone-wide message, or a remote private message if the text has
-    /// the form `:target:(from)>message`.
+    /// the form `:target:(from)>message`. A `kind` of [`PERMIT_KIND`] is decoded
+    /// as [`BillerToServer::Permit`] instead.
     ZoneMessage {
         /// Originating server id.
         source_server: u32,
@@ -299,6 +346,15 @@ pub enum BillerToServer {
         sound: u8,
         /// Text.
         text: Vec<u8>,
+    },
+    /// `0x03` with kind [`PERMIT_KIND`]: add `name` to this zone's permit list
+    /// (conventionally `permit.txt`). This layout has no sound byte. The biller
+    /// sends it on behalf of another zone's [`ServerToBiller::RemotePermit`].
+    Permit {
+        /// Originating id, copied from the request's connection id.
+        source_server: u32,
+        /// Player name.
+        name: Vec<u8>,
     },
     /// `0x04`: recycle (restart) the zone.
     Recycle,
@@ -346,7 +402,8 @@ pub enum BillerToServer {
         /// Packet.
         data: Vec<u8>,
     },
-    /// `0x33`: the biller's identity data.
+    /// `0x33`: the biller's identity data, kept raw. [`BillingIdentity::parse`]
+    /// splits it into the SSC id and the rotating identity value.
     Identity(Vec<u8>),
     /// `0x34`: one channel message for several players.
     MultiChannelChat {
@@ -414,13 +471,26 @@ impl ServerToBiller {
                     Some(PlayerScore::read(&mut r)?)
                 },
             },
-            0x06 => Self::RemoteZoneMessage {
-                connection_id: r.u32()?,
-                server_id: r.u32()?,
-                kind: r.u8()?,
-                sound: r.u8()?,
-                text: r.cstr(),
-            },
+            0x06 => {
+                let connection_id = r.u32()?;
+                let server_id = r.u32()?;
+                let kind = r.u8()?;
+                if kind == PERMIT_KIND {
+                    Self::RemotePermit {
+                        connection_id,
+                        server_id,
+                        name: r.cstr(),
+                    }
+                } else {
+                    Self::RemoteZoneMessage {
+                        connection_id,
+                        server_id,
+                        kind,
+                        sound: r.u8()?,
+                        text: r.cstr(),
+                    }
+                }
+            }
             0x07 => Self::UserRemotePrivate {
                 connection_id: r.u32()?,
                 group_id: r.u32()?,
@@ -541,6 +611,17 @@ impl ServerToBiller {
                 out.put_u8(*kind);
                 out.put_u8(*sound);
                 out.put_cstr(text);
+            }
+            Self::RemotePermit {
+                connection_id,
+                server_id,
+                name,
+            } => {
+                out.put_u8(0x06);
+                out.put_u32(*connection_id);
+                out.put_u32(*server_id);
+                out.put_u8(PERMIT_KIND);
+                out.put_cstr(name);
             }
             Self::UserRemotePrivate {
                 connection_id,
@@ -677,12 +758,23 @@ impl BillerToServer {
                 Self::UserLogin(l)
             }
             0x02 => Self::Shutdown,
-            0x03 => Self::ZoneMessage {
-                source_server: r.u32()?,
-                kind: r.u8()?,
-                sound: r.u8()?,
-                text: r.cstr(),
-            },
+            0x03 => {
+                let source_server = r.u32()?;
+                let kind = r.u8()?;
+                if kind == PERMIT_KIND {
+                    Self::Permit {
+                        source_server,
+                        name: r.cstr(),
+                    }
+                } else {
+                    Self::ZoneMessage {
+                        source_server,
+                        kind,
+                        sound: r.u8()?,
+                        text: r.cstr(),
+                    }
+                }
+            }
             0x04 => Self::Recycle,
             0x05 => Self::FileTransfer {
                 name: r.fixed()?,
@@ -759,6 +851,15 @@ impl BillerToServer {
                 out.put_u8(*kind);
                 out.put_u8(*sound);
                 out.put_cstr(text);
+            }
+            Self::Permit {
+                source_server,
+                name,
+            } => {
+                out.put_u8(0x03);
+                out.put_u32(*source_server);
+                out.put_u8(PERMIT_KIND);
+                out.put_cstr(name);
             }
             Self::Recycle => out.put_u8(0x04),
             Self::FileTransfer { name, data } => {
@@ -901,6 +1002,11 @@ mod tests {
                 sound: 4,
                 text: text(),
             },
+            ServerToBiller::RemotePermit {
+                connection_id: u32::MAX,
+                server_id: 7,
+                name: b"Pilot".to_vec(),
+            },
             ServerToBiller::UserRemotePrivate {
                 connection_id: u32::MAX,
                 group_id: 1,
@@ -987,9 +1093,13 @@ mod tests {
             BillerToServer::Shutdown,
             BillerToServer::ZoneMessage {
                 source_server: 1,
-                kind: 1,
+                kind: 2,
                 sound: 2,
                 text: text(),
+            },
+            BillerToServer::Permit {
+                source_server: u32::MAX,
+                name: b"Pilot".to_vec(),
             },
             BillerToServer::Recycle,
             BillerToServer::FileTransfer {
@@ -1031,6 +1141,68 @@ mod tests {
             let b = c.to_bytes();
             assert_eq!(BillerToServer::decode(&b).unwrap(), c, "{b:02x?}");
         }
+    }
+
+    /// A permit entry has no sound byte: the name starts straight after the kind,
+    /// so reading it with the message layout would eat its first letter.
+    #[test]
+    fn permit_entries_have_no_sound_byte() {
+        let b = [
+            0x03,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            PERMIT_KIND,
+            b'B',
+            b'o',
+            b'b',
+            0,
+        ];
+        assert_eq!(
+            BillerToServer::decode(&b).unwrap(),
+            BillerToServer::Permit {
+                source_server: u32::MAX,
+                name: b"Bob".to_vec(),
+            }
+        );
+        let b = [0x03, 1, 0, 0, 0, 0x02, 5, b'h', b'i', 0];
+        assert_eq!(
+            BillerToServer::decode(&b).unwrap(),
+            BillerToServer::ZoneMessage {
+                source_server: 1,
+                kind: 2,
+                sound: 5,
+                text: b"hi".to_vec(),
+            }
+        );
+        let b = ServerToBiller::RemotePermit {
+            connection_id: u32::MAX,
+            server_id: 4,
+            name: b"Bob".to_vec(),
+        }
+        .to_bytes();
+        assert_eq!(
+            b,
+            [
+                0x06, 0xFF, 0xFF, 0xFF, 0xFF, 4, 0, 0, 0, 1, b'B', b'o', b'b', 0
+            ]
+        );
+    }
+
+    #[test]
+    fn billing_identity_forms() {
+        let none = BillingIdentity::parse(&[]);
+        assert_eq!((none.id, none.value), (None, None));
+        let short = BillingIdentity::parse(&[1; 100]);
+        assert_eq!((short.id, short.value), (None, None));
+        let id_only = BillingIdentity::parse(&[7; 130]);
+        assert_eq!((id_only.id, id_only.value), (Some([7; 128]), None));
+        let mut full = vec![7; 128];
+        full.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        full.extend_from_slice(&[0xEE; 8]);
+        let full = BillingIdentity::parse(&full);
+        assert_eq!((full.id, full.value), (Some([7; 128]), Some(0x1234_5678)));
     }
 
     #[test]

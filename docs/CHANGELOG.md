@@ -4,6 +4,20 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto (billing permits, biller identity, arena name)
+- **Breaking: `s2c::PlayerId.extra: Option<u8>` is now `arena: Option<Vec<u8>>`.**
+  - Anything after the player id is the arena's name with its NUL. Continuum treats the last byte as the terminator, so a 4-byte packet is an empty name, and it drops packets over 19 bytes.
+  - `PlayerId::MAX_ARENA_NAME` is 15.
+  - Use `arena: None` for the 3-byte form the reference server sends.
+- **Permit entries:**
+  - A kind-`0x01` B2S `0x03` now decodes as the new `BillerToServer::Permit`, and a kind-`0x01` S2B `0x06` as `ServerToBiller::RemotePermit`. Both enums are `#[non_exhaustive]`, so existing matches still compile.
+  - These layouts have no sound byte. Before, the first letter of the name was read as the sound.
+  - `billing::PERMIT_KIND` is the kind byte.
+- **`billing::BillingIdentity::parse`** splits a B2S `0x33` payload into the 128-byte SSC id and the rotating `u32` identity value. `BillerToServer::Identity` still keeps the raw bytes.
+- **Docs:**
+  - The pages for S2C `0x01` and `0x1C`, C2S `0x01`, core `00 02` (the 139-byte Continuum form), B2S `0x03` and `0x33`, and S2B `0x04` and `0x06` are updated, with sources.
+  - Two pages were renamed to `b2s-03-zone-message-or-permit.md` and `s2b-06-remote-zone-message-or-permit.md`.
+
 ### oss-sim (validation review round 7: V1, V2, V3)
 - **V1, breaking: `Context::max_ticks` is now a required `u32`, and `Context` no longer implements `Default`.**
   - Build it with `Context::new(max_ticks)`. Every other field starts strict (nothing happened), and you then set what the server saw.

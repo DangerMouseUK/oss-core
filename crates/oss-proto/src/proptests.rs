@@ -26,7 +26,9 @@ use proptest::option;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
-use crate::billing::{BillerLogin, BillerToServer, PlayerScore, ServerToBiller, UserLogin};
+use crate::billing::{
+    BillerLogin, BillerToServer, PERMIT_KIND, PlayerScore, ServerToBiller, UserLogin,
+};
 use crate::c2s::{self, *};
 use crate::common::{DamageData, PlayerData};
 use crate::control::{Cluster, CorePacket};
@@ -237,8 +239,8 @@ fn map_filename() -> impl Strategy<Value = MapFilename> {
 
 fn s2c_union() -> (usize, BoxedStrategy<S2CPacket>) {
     packet_union! { S2CPacket;
-        PlayerId => (any::<i16>(), option::of(any::<u8>()))
-            .prop_map(|(pid, extra)| PlayerId { pid, extra }),
+        PlayerId => (any::<i16>(), option::of(cstr(PlayerId::MAX_ARENA_NAME)))
+            .prop_map(|(pid, arena)| PlayerId { pid, arena }),
         EnteringArena => EnteringArena::arb(),
         PlayerEntering => vec(player_data(), 1..5).prop_map(|players| PlayerEntering { players }),
         PlayerLeaving => PlayerLeaving::arb(),
@@ -795,15 +797,27 @@ fn server_to_biller() -> impl Strategy<Value = ServerToBiller> {
                     }
                 }
             ),
-        (u(), u(), any::<u8>(), any::<u8>(), cstr(200)).prop_map(
-            |(connection_id, server_id, kind, sound, text)| S::RemoteZoneMessage {
-                connection_id,
-                server_id,
-                kind,
-                sound,
-                text,
-            }
-        ),
+        (
+            u(),
+            u(),
+            any::<u8>().prop_filter("permit kind", |k| *k != PERMIT_KIND),
+            any::<u8>(),
+            cstr(200)
+        )
+            .prop_map(|(connection_id, server_id, kind, sound, text)| {
+                S::RemoteZoneMessage {
+                    connection_id,
+                    server_id,
+                    kind,
+                    sound,
+                    text,
+                }
+            }),
+        (u(), u(), cstr(32)).prop_map(|(connection_id, server_id, name)| S::RemotePermit {
+            connection_id,
+            server_id,
+            name
+        }),
         (u(), u(), any::<u8>(), any::<u8>(), cstr(200)).prop_map(
             |(connection_id, group_id, kind, sound, text)| S::UserRemotePrivate {
                 connection_id,
@@ -865,14 +879,22 @@ fn biller_to_server() -> impl Strategy<Value = BillerToServer> {
     prop_oneof![
         biller_login().prop_map(B::UserLogin),
         Just(B::Shutdown),
-        (u(), any::<u8>(), any::<u8>(), cstr(200)).prop_map(
-            |(source_server, kind, sound, text)| B::ZoneMessage {
+        (
+            u(),
+            any::<u8>().prop_filter("permit kind", |k| *k != PERMIT_KIND),
+            any::<u8>(),
+            cstr(200)
+        )
+            .prop_map(|(source_server, kind, sound, text)| B::ZoneMessage {
                 source_server,
                 kind,
                 sound,
                 text,
-            }
-        ),
+            }),
+        (u(), cstr(32)).prop_map(|(source_server, name)| B::Permit {
+            source_server,
+            name
+        }),
         Just(B::Recycle),
         (fixed::<16>(), bytes(300)).prop_map(|(name, data)| B::FileTransfer { name, data }),
         (u(), any::<u16>()).prop_map(|(connection_id, reason)| B::Kick {

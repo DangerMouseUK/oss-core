@@ -33,7 +33,7 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 ## Notes
 
-SubSpace clients send nothing after offset 86.
+SubSpace clients send nothing after offset 86. The password is NUL-padded text, except from a Continuum client logging in to a zone on an SSC biller: then it is a 32-byte hash keyed to the biller identity (B2S `0x33`), so keep it as bytes. A client redirected into a non-SSC zone sends 32 zero bytes.
 
 ## Evidence
 

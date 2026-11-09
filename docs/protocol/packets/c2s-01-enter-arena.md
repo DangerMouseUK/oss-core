@@ -17,8 +17,8 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x01` |
 | 1 | 1 | u8 | ship | 8 = spectator |
-| 2 | 1 | i8 | allow_audio | Most sources; one reads the obscenity filter here |
-| 3 | 1 | i8 | obscenity_filter | Most sources |
+| 2 | 1 | i8 | allow_audio | Nonzero: accept voice messages. Sources disagree; see notes |
+| 3 | 1 | i8 | obscenity_filter | Nonzero: filter chat sent to this player |
 | 4 | 2 | i16 | x_res | Screen width |
 | 6 | 2 | i16 | y_res | Screen height |
 | 8 | 2 | i16 | arena_type | −3 named, −1/−2 any public, ≥ 0 public arena *n* |
@@ -29,7 +29,7 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 ## Notes
 
-Sources disagree on offsets 2 and 3.
+Sources disagree on offsets 2 and 3. The reference server's `goarena.h` puts the obscenity filter at 2 and allow-audio at 3 in both forms. Subspace Server .NET reads allow-audio at 2 in the 26-byte form and at 3 in the 27-byte Continuum form. The QS protocol reference (poid.be/subspace/protocols) puts allow-audio at 2 in both, citing Continuum's sender and subgame echoing offset 2 as the allow-audio byte of S2C `0x03`. oss-core and oss-server read allow-audio at 2.
 
 ## Evidence
 

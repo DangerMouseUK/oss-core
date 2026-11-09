@@ -520,13 +520,28 @@ fixed_packet! {
     }
 }
 
-/// S2C `0x01`: your player id (3 bytes; some servers add a byte).
+/// S2C `0x01`: your player id, optionally followed by the arena's name.
+///
+/// The 3-byte form (what the reference server sends) carries no name. Anything
+/// after the id is a name, and the sender includes its NUL: Continuum treats the
+/// last byte as the terminator whatever it holds, so a 4-byte packet is an empty
+/// name and a 5- to 19-byte one carries the name. It drops longer packets
+/// outright, so names are at most 15 bytes. Continuum uses the name to pick the
+/// arena's file folder, and saved ships only work while it is empty (a public
+/// arena).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerId {
     /// Your player id.
     pub pid: i16,
-    /// Optional trailing byte of unknown meaning.
-    pub extra: Option<u8>,
+    /// The arena's name, if the packet carries one; `Some` of an empty name is the
+    /// 4-byte form. Decoding stops at the first NUL and never includes the last
+    /// byte, as Continuum reads it.
+    pub arena: Option<Vec<u8>>,
+}
+
+impl PlayerId {
+    /// Longest name Continuum accepts (19 bytes in all, NUL included).
+    pub const MAX_ARENA_NAME: usize = 15;
 }
 
 impl Packet for PlayerId {
@@ -534,18 +549,20 @@ impl Packet for PlayerId {
     fn decode(data: &[u8]) -> Result<Self, DecodeError> {
         let mut r = expect_type(data, Self::TYPE)?;
         let pid = r.i16()?;
-        let extra = if r.remaining() > 0 {
-            Some(r.u8()?)
-        } else {
-            None
+        let arena = match r.rest() {
+            [] => None,
+            [body @ .., _last] => {
+                let end = body.iter().position(|&b| b == 0).unwrap_or(body.len());
+                Some(body[..end].to_vec())
+            }
         };
-        Ok(Self { pid, extra })
+        Ok(Self { pid, arena })
     }
     fn encode(&self, out: &mut Vec<u8>) {
         out.put_u8(Self::TYPE);
         out.put_i16(self.pid);
-        if let Some(e) = self.extra {
-            out.put_u8(e);
+        if let Some(name) = &self.arena {
+            out.put_cstr(name);
         }
     }
 }

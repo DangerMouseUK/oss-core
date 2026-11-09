@@ -56,12 +56,12 @@ fn s2c_samples() -> Vec<S2CPacket> {
     vec![
         s2c::PlayerId {
             pid: 5,
-            extra: None,
+            arena: None,
         }
         .into(),
         s2c::PlayerId {
             pid: 5,
-            extra: Some(1),
+            arena: Some(b"duel".to_vec()),
         }
         .into(),
         s2c::EnteringArena {}.into(),

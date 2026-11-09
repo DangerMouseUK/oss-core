@@ -986,7 +986,7 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
     let map = served_map();
     z.send(s2c::PlayerId {
         pid: 0,
-        extra: None,
+        arena: None,
     });
     if let Some(peer) = z.peer {
         z.server.send(&peer, &settings, true);
