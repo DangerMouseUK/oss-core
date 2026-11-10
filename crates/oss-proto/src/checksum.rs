@@ -71,19 +71,22 @@ pub fn counts_for_map_checksum(tile: u8) -> bool {
 /// Map checksum for the security response.
 ///
 /// Samples every 31st column and 32nd row, starting at offsets derived from the
-/// key, and adds `key ^ tile` for each counted tile. The key is treated as a
-/// signed integer, so for keys with the top bit set the start offsets are
-/// negative; like the reference server, coordinates then wrap modulo 1024, so
-/// `tile(x, y)` is always called with `0 <= x, y < 1024`. Big map objects must
-/// already be expanded into the grid (see `oss_formats::Level::server_tile_grid`).
+/// key, and adds `key ^ tile` for each counted tile. The client's loop at
+/// `0x00423B2D` divides the key **unsigned**, so the start offsets are always
+/// in `0..32`; `tile(x, y)` is therefore always called with `0 <= x, y < 1024`.
+/// ASSS and Subspace Server .NET divide a signed copy instead, which for a key
+/// with the top bit set samples different columns (`2^32 % 31 == 4`). This is
+/// one of the places the client wins: a server that follows the reference
+/// implementations computes a checksum no real client can match, for about half
+/// of all keys. Big map objects must already be expanded into the grid (see
+/// `oss_formats::Level::server_tile_grid`).
 pub fn map_checksum(key: u32, mut tile: impl FnMut(i32, i32) -> u8) -> u32 {
-    let base = key as i32;
     let mut sum = key;
-    let mut y = base % 32;
+    let mut y = (key % 32) as i32;
     while y < 1024 {
-        let mut x = base % 31;
+        let mut x = (key % 31) as i32;
         while x < 1024 {
-            let t = tile(x & 1023, y & 1023);
+            let t = tile(x, y);
             if counts_for_map_checksum(t) {
                 sum = sum.wrapping_add(key ^ u32::from(t));
             }
@@ -240,16 +243,24 @@ mod tests {
             map_checksum(key, |x, y| if (x, y) == (3, 1) { 5 } else { 0 }),
             key
         );
-        // Keys with the top bit set start at negative offsets, which wrap.
-        let mut seen = (1024, 1024, 0, 0);
-        map_checksum(0x8000_0001, |x, y| {
+        // A key with the top bit set is divided unsigned, as the client does:
+        // 0x80000001 % 31 == 3 and % 32 == 1, so sampling starts at (3, 1) and
+        // no coordinate ever leaves 0..1024.
+        let top = 0x8000_0001u32;
+        let mut seen = (1024, 1024, -1, -1);
+        map_checksum(top, |x, y| {
             seen = (seen.0.min(x), seen.1.min(y), seen.2.max(x), seen.3.max(y));
             0
         });
-        assert!(seen.0 >= 0 && seen.1 >= 0 && seen.2 < 1024 && seen.3 < 1024);
-        // 0x80000001 as i32 % 31 == -1, so column 1023 is sampled first.
-        let c = map_checksum(0x8000_0001, |x, _| u8::from(x == 1023));
-        assert_ne!(c, 0x8000_0001);
+        assert_eq!((seen.0, seen.1), (3, 1));
+        assert!(seen.2 < 1024 && seen.3 < 1024);
+        assert_eq!(
+            map_checksum(top, |x, y| u8::from((x, y) == (3, 1))),
+            top.wrapping_add(top ^ 1)
+        );
+        // Column 1023 is not on the 3, 34, 65, ... stride, so the signed
+        // reading (which started there) would show up here as a difference.
+        assert_eq!(map_checksum(top, |x, _| u8::from(x == 1023)), top);
     }
 
     #[test]

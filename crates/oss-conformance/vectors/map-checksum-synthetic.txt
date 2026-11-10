@@ -3,7 +3,10 @@
 # Map security checksum vectors from ASSS 1.4.4 src/core/mapdata.c (load_from_file + GetChecksum,
 # compiled unmodified). Tiles counted: 1..160 and 171 (safe); big objects expanded as ASSS does.
 # Keys >= 0x80000000 are negative as int: ASSS then starts x/y at negative offsets and its sparse
-# array wraps coordinates mod 1024. Whether Continuum does the same is unconfirmed.
+# array wraps coordinates mod 1024. The Continuum client does NOT: its loop at 0x00423B2D divides
+# unsigned. Confirmed by running the client (64/64 keys, 46 top-bit-set). Such a line therefore
+# carries two sums, `checksum <key> <asss> <client>`; we assert the client's and keep ASSS's as the
+# record. Only top-bit-set keys diverge.
 # map <label> <file name> <file size> <crc32 of file (zlib; the S2C 0x29 map checksum)>
 # tiles <non-zero tiles after expansion> <turf flags> <out-of-range tile records>
 # checksum <key> <map checksum>
@@ -15,17 +18,17 @@ checksum 0000001f 00000045
 checksum 00000020 00000063
 checksum 12345678 5b05b0c0
 checksum 7fffffff 7fffff50
-checksum 80000000 80000010
-checksum deadbeef bd5b7d87
-checksum ffffffff fffffe68
+checksum 80000000 80000010 00000176
+checksum deadbeef bd5b7d87 bd5b7de1
+checksum ffffffff fffffe68 ffffffc4
 checksum 210ba697 6322f344
 checksum 26910f0c 4d221e3f
 checksum 7482f9fc 5d88ece1
-checksum a0c945ce 41928b27
+checksum a0c945ce 41928b27 23ee5cc5
 checksum 19ac2485 4d046e14
-checksum b04bf585 10e3e0f9
+checksum b04bf585 10e3e0f9 6097eb34
 checksum 43392cf0 0ce4b387
-checksum bc50e2aa 69e55023
+checksum bc50e2aa 69e55023 34f2a7c8
 checksum 0065ba9c 0262604d
 checksum 162499f0 426dcd48
 checksum 4eababf9 ec03036f
@@ -33,15 +36,15 @@ checksum 1284114f 819c7aa8
 checksum 67e92b15 37bb816c
 checksum 719cfaeb c673eaa9
 checksum 14293ed4 64ce39a2
-checksum a58e7048 3bc831fd
+checksum a58e7048 3bc831fd 3bc8316e
 checksum 487a3ad0 21e8eb13
-checksum 8434339c 1939364d
+checksum 8434339c 1939364d 950502ef
 checksum 1da37a17 3b46f431
-checksum fd22ec09 fa45d83c
+checksum fd22ec09 fa45d83c f768c472
 checksum 3fd7caf0 3fd7caf0
-checksum f2f67d71 e5ecfa94
+checksum f2f67d71 e5ecfa94 f2f67d71
 checksum 33dab561 9b901f81
-checksum ce68e7b8 d6756e5e
+checksum ce68e7b8 d6756e5e 6b3ab756
 map synth-b-edges.lvl synth-b-edges.lvl 17072 1b12f839
 tiles 4328 21 2
 checksum 00000000 00001027
@@ -50,17 +53,17 @@ checksum 0000001f 00001753
 checksum 00000020 00000518
 checksum 12345678 12345678
 checksum 7fffffff 7ffff861
-checksum 80000000 000000ed
+checksum 80000000 000000ed 000003ff
 checksum deadbeef deadbeef
-checksum ffffffff ffffe657
+checksum ffffffff ffffe657 fffff752
 checksum 210ba697 210ba697
 checksum 26910f0c 26910f0c
 checksum 7482f9fc 7482f9fc
-checksum a0c945ce a0c945ce
+checksum a0c945ce a0c945ce c686540a
 checksum 19ac2485 19ac2485
 checksum b04bf585 b04bf585
 checksum 43392cf0 43392cf0
-checksum bc50e2aa bc50e2aa
+checksum bc50e2aa bc50e2aa 841d26d4
 checksum 0065ba9c 0065ba9c
 checksum 162499f0 162499f0
 checksum 4eababf9 4eababf9
@@ -68,13 +71,13 @@ checksum 1284114f 25082333
 checksum 67e92b15 67e92b15
 checksum 719cfaeb e339f5b7
 checksum 14293ed4 28527d58
-checksum a58e7048 4b1ce054
+checksum a58e7048 4b1ce054 a58e7048
 checksum 487a3ad0 90f4758c
 checksum 8434339c 8434339c
 checksum 1da37a17 1da37a17
 checksum fd22ec09 fd22ec09
 checksum 3fd7caf0 3fd7caf0
-checksum f2f67d71 f2f67d71
+checksum f2f67d71 f2f67d71 e5ecfacd
 checksum 33dab561 67b56a9d
 checksum ce68e7b8 ce68e7b8
 map synth-c-elvl.lvl synth-c-elvl.lvl 57518 41f80ce1
@@ -85,17 +88,17 @@ checksum 0000001f 000000b5
 checksum 00000020 0000007d
 checksum 12345678 2468aca1
 checksum 7fffffff 7fffff9a
-checksum 80000000 00000099
-checksum deadbeef bd5b7d60
-checksum ffffffff ffffff7f
+checksum 80000000 00000099 800000b5
+checksum deadbeef bd5b7d60 7ab6fab9
+checksum ffffffff ffffff7f ffffffff
 checksum 210ba697 6322f400
 checksum 26910f0c 4d221e40
 checksum 7482f9fc 7482f9fc
-checksum a0c945ce 832516a8
+checksum a0c945ce 832516a8 e25bd17b
 checksum 19ac2485 4d046e09
-checksum b04bf585 10e3e0d5
+checksum b04bf585 10e3e0d5 6097ea9d
 checksum 43392cf0 c9ab867d
-checksum bc50e2aa 78a1c5a2
+checksum bc50e2aa 78a1c5a2 34f2a7d0
 checksum 0065ba9c 0131307c
 checksum 162499f0 426dcd28
 checksum 4eababf9 ec030394
@@ -103,15 +106,15 @@ checksum 1284114f 1284114f
 checksum 67e92b15 d7602ec5
 checksum 719cfaeb c673eae7
 checksum 14293ed4 3c7bbc0f
-checksum a58e7048 f0ab50a6
+checksum a58e7048 f0ab50a6 f0ab5198
 checksum 487a3ad0 d96eb08f
-checksum 8434339c 10d0cf67
+checksum 8434339c 10d0cf67 08686763
 checksum 1da37a17 3b46f41e
-checksum fd22ec09 ebf4763d
+checksum fd22ec09 ebf4763d f1ae9d0f
 checksum 3fd7caf0 bf87608a
-checksum f2f67d71 cbd9f5f1
+checksum f2f67d71 cbd9f5f1 f2f67d71
 checksum 33dab561 67b56aad
-checksum ce68e7b8 6b3ab6b3
+checksum ce68e7b8 6b3ab6b3 9cd1cf63
 map synth-d-overflow.lvl synth-d-overflow.lvl 16 908a791f
 tiles 58 0 0
 checksum 00000000 00000000
