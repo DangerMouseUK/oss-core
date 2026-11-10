@@ -4,7 +4,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 
 | Read | Client code | Server only | Not yet | Not settings |
 |---|---|---|---|---|
-| 175 | 23 | 8 | 23 | 9 |
+| 175 | 25 | 8 | 21 | 9 |
 
 ## Not used yet
 
@@ -17,7 +17,6 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Latency:S2CNoDataKickoutDelay` | the transport's own timeout is used |
 | `Latency:SendRoutePercent` | client lag reports aren't sent yet |
 | `Message:AllowAudioMessages` | voice messages aren't supported |
-| `Misc:ActivateAppShutdownTime` | engine shutdown after switching back to the game |
 | `Misc:AllowSavedShips` | saved-ship option |
 | `Misc:DisableBallKilling` | ball-killing rule |
 | `Misc:ExtraPositionData` | whether other (non-staff) players receive your extra position data (energy, items, timers); mostly the receive side |
@@ -28,11 +27,10 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Misc:SlowFrameCheck` | frame-rate check (anti-cheat) |
 | `Misc:TickerDelay` | ticker text scrolling |
 | `Misc:VictoryMusic` | victory music |
-| `Radar:RadarMode` | radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates |
+| `Radar:RadarMode` | radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the radar layout itself, which half or quarter you see and whether teammates show through it, is not done |
 | `Radar:RadarNeutralSize` | neutral zone on the radar |
 | `Ship:DamageFactor` | how likely a hit makes the ship lose a prize: 0 = never, 1 = very likely, 5000 = almost never (higher is safer; not a damage multiplier) |
 | `Ship:PrizeShareLimit` | highest bounty at which the ship still receives team prizes |
-| `Spectator:NoXRadar` | spectators' x-radar |
 
 ## Server only
 
@@ -87,6 +85,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Kill:EnterDelay` | `enter_delay` |
 | `Mine:MineAliveTime` | `mine_alive_time` |
 | `Mine:TeamMaxMines` | `team_max_mines` |
+| `Misc:ActivateAppShutdownTime` | `activate_app_shutdown_time()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Misc:AntiWarpSettleDelay` | `anti_warp_settle_delay` |
 | `Misc:BounceFactor` | `bounce_factor` |
 | `Misc:DecoyAliveTime` | `decoy_alive_time` |
@@ -246,6 +245,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Spawn:Team3-X` | `.spawns` in `crates/oss-client/src/game/sandbox.rs` |
 | `Spawn:Team3-Y` | `.spawns` in `crates/oss-client/src/game/sandbox.rs` |
 | `Spectator:HideFlags` | `hide_flags()` in `crates/oss-client/src/game/sandbox.rs` |
+| `Spectator:NoXRadar` | `spec_xradar_allowed()` in `crates/oss-client/src/game/sandbox.rs` |
 | `Toggle:AntiWarpPixels` | `anti_warp_pixels` |
 | `Wormhole:GravityBombs` | `gravity_bombs` |
 | `Wormhole:SwitchTime` | `wormhole_switch_time` |

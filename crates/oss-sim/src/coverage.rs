@@ -155,7 +155,10 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("Mine:TeamMaxMines", Use::Read("team_max_mines")),
     (
         "Misc:ActivateAppShutdownTime",
-        Use::NotYet("engine shutdown after switching back to the game"),
+        Use::Client(
+            "crates/oss-client/src/game/sandbox.rs",
+            "activate_app_shutdown_time()",
+        ),
     ),
     ("Misc:AllowSavedShips", Use::NotYet("saved-ship option")),
     (
@@ -265,7 +268,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     (
         "Radar:RadarMode",
         Use::NotYet(
-            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates",
+            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the radar layout itself, which half or quarter you see and whether teammates show through it, is not done",
         ),
     ),
     (
@@ -462,7 +465,13 @@ pub const COVERAGE: &[(&str, Use)] = &[
         "Spectator:HideFlags",
         Use::Client("crates/oss-client/src/game/sandbox.rs", "hide_flags()"),
     ),
-    ("Spectator:NoXRadar", Use::NotYet("spectators' x-radar")),
+    (
+        "Spectator:NoXRadar",
+        Use::Client(
+            "crates/oss-client/src/game/sandbox.rs",
+            "spec_xradar_allowed()",
+        ),
+    ),
     (
         "Team:MaxFrequency",
         Use::Server("the server enforces team limits"),
