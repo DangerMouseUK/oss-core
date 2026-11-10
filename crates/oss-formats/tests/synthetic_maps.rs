@@ -227,8 +227,14 @@ fn check(text: &str, only: Option<&str>) -> usize {
             "checksum" => {
                 if let Some((lvl, name)) = &current {
                     let (grid, _) = lvl.server_tile_grid();
+                    // `checksum <key> <sum>`, or `checksum <key> <asss sum>
+                    // <client sum>` where ASSS 1.4.4 and the Continuum client
+                    // disagree on top-bit-set keys. Assert the client's value,
+                    // which is always the last field; ASSS's is kept as the
+                    // record of what it does. Mirrors the arm in
+                    // oss-conformance's vectors.rs. See the vector header.
                     let key = u32::from_str_radix(f[1], 16).unwrap();
-                    let want = u32::from_str_radix(f[2], 16).unwrap();
+                    let want = u32::from_str_radix(f[f.len() - 1], 16).unwrap();
                     let got = map_checksum(key, |x, y| grid.get(x as u32, y as u32));
                     assert_eq!(got, want, "{name} key {key:#x}");
                     checked += 1;
