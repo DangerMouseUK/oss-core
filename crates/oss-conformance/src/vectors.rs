@@ -306,7 +306,11 @@ fn maps(v: &mut Vec<Case>, name: &str) {
                     ));
                 }
             }
-            ["checksum", key, sum] => {
+            // `checksum <key> <sum>`, or `checksum <key> <asss sum> <client
+            // sum>` where ASSS 1.4.4 and the Continuum client disagree. We
+            // assert the client's value; the ASSS one is kept as the record of
+            // what it does. See the vector file's header.
+            ["checksum", key, sum] | ["checksum", key, _, sum] => {
                 if let Some((file, bytes)) = current {
                     v.push(exact(
                         "checksum.map",
