@@ -616,7 +616,9 @@ mod tests {
         if skipped > 0 {
             // Visible with `--nocapture`, and in CI logs on failure.
             eprintln!(
-                "settings coverage: {skipped} Use::Client entries NOT checked (no oss-client                  checkout; set OSS_CLIENT_DIR to check them), {checked} checked"
+                "settings coverage: {skipped} Use::Client entries NOT checked \
+                 (no oss-client checkout; set OSS_CLIENT_DIR to check them), \
+                 {checked} checked"
             );
         } else {
             eprintln!("settings coverage: all {checked} Use::Client entries checked");
