@@ -45,14 +45,25 @@ The Continuum cipher and its key expansion are not part of this repository. The 
 | S→C | `00 10 u32 key1, u32 key2` | 10 | no |
 | C→S | `00 11 u32 key1, u16 1` | 8 | no; from here both sides use the cipher |
 | S→C | `00 02 key` | 6 | apparently yes |
-| S→C, later | `00 12 u32 seed` | ≥ 6 | yes, in session |
-| C→S | `00 13 u32 seed, 20 × u32` | 86 | yes, in session |
+| S→C, later | `00 12` | 2 or more | yes, in session |
+| C→S | `00 13 00 00, u32 seed, 20 × u32` | 88 | yes, in session |
 
 **Framing and receive-path rules**
 
 - Ciphertext is up to 2 bytes longer than plaintext: one check byte, plus an escape byte prepended when the ciphertext would otherwise look like a connection packet.
 - Servers must therefore check for `00 01` / `00 11` *before* decrypting.
 - `00 12` and `00 13` arrive through the normal receive path, possibly reliable or clustered, and are passed to the cipher.
+
+**The `00 12` / `00 13` exchange**
+
+Read from the 0.40 client's own handler for subtype `0x12`, by running it. No server has been observed sending a `00 12`, so what a server does with the answer — or whether any server asks — is unknown; what follows is only what this client replies.
+
+- **The client never reads the `00 12`.** Neither its payload nor its length is touched, and there is no length gate: any `00 12` of two bytes or more is answered identically. It therefore carries no seed, and nothing in the reply echoes it.
+- **The reply is 88 bytes**: the two header bytes `00 13`, two zero bytes, a `u32` seed, then twenty `u32` words. Little-endian throughout, like the rest of the protocol.
+***REMOVED***
+***REMOVED***
+- **Nothing is re-keyed.** The handler builds the reply from a scratch expander and leaves the connection's own cipher state, including its key words, untouched.
+- `00 13` is client-to-server only: the client's dispatch table sends subtype `0x13` to its unknown-packet arm.
 
 ## Plug-in API (`oss-net`)
 

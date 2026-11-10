@@ -683,8 +683,9 @@ impl Packet for Registration {
     }
 }
 
-/// C2S `0x1A`: answer to a security request. 40 bytes from SubSpace clients, 46
-/// from Continuum (which adds timer drift and a map CRC).
+/// C2S `0x1A`: answer to a security request. 40 bytes from SubSpace clients;
+/// Continuum adds a timer drift, and later builds a map CRC-32 after it, so a
+/// Continuum response is 42 or 46 bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SecurityResponse {
     /// Weapon packets received.
@@ -715,15 +716,31 @@ pub struct SecurityResponse {
     pub ping_high: u16,
     /// Slow frame detected.
     pub slow_frame: u8,
-    /// Continuum only: timer drift and [`crate::checksum::map_crc32`].
-    pub continuum: Option<(i16, u32)>,
+    /// Continuum only: the timer drift, and [`crate::checksum::map_crc32`] when
+    /// the build sends one. Continuum 0.40 sends the drift alone (42 bytes);
+    /// later builds append the CRC (46). A `None` CRC means the client did not
+    /// report one, not that it reported zero.
+    pub continuum: Option<(i16, Option<u32>)>,
 }
 
 impl SecurityResponse {
-    /// SubSpace length.
+    /// SubSpace length: no timer drift and no map CRC-32.
     pub const VIE_LEN: usize = 40;
-    /// Continuum length.
-    pub const CONT_LEN: usize = 46;
+    /// Continuum length with the timer drift and no map CRC-32, which is what
+    /// build 0.40 sends.
+    pub const CONT_LEN: usize = 42;
+    /// Continuum length with the timer drift and the map CRC-32, which later
+    /// builds send.
+    pub const CONT_CRC_LEN: usize = 46;
+
+    /// Whether `len` is a length a Continuum client is known to send.
+    ///
+    /// Servers that length-check before decoding must accept both forms: a
+    /// 0.40 client sends [`Self::CONT_LEN`], a later one
+    /// [`Self::CONT_CRC_LEN`].
+    pub const fn is_continuum_len(len: usize) -> bool {
+        len == Self::CONT_LEN || len == Self::CONT_CRC_LEN
+    }
 }
 
 impl Packet for SecurityResponse {
@@ -745,8 +762,14 @@ impl Packet for SecurityResponse {
             ping_low: r.u16()?,
             ping_high: r.u16()?,
             slow_frame: r.u8()?,
-            continuum: if r.remaining() >= 6 {
-                Some((r.i16()?, r.u32()?))
+            continuum: if r.remaining() >= 2 {
+                let drift = r.i16()?;
+                let crc = if r.remaining() >= 4 {
+                    Some(r.u32()?)
+                } else {
+                    None
+                };
+                Some((drift, crc))
             } else {
                 None
             },
@@ -778,7 +801,9 @@ impl Packet for SecurityResponse {
         out.put_u8(self.slow_frame);
         if let Some((drift, crc)) = self.continuum {
             out.put_i16(drift);
-            out.put_u32(crc);
+            if let Some(crc) = crc {
+                out.put_u32(crc);
+            }
         }
     }
 }

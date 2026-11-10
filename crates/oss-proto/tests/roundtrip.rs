@@ -517,8 +517,15 @@ fn c2s_samples() -> Vec<C2SPacket> {
             ..Default::default()
         }
         .into(),
+        // Continuum 0.40: the timer drift and no map CRC-32 (42 bytes).
         c2s::SecurityResponse {
-            continuum: Some((-2, 0xDEAD_BEEF)),
+            continuum: Some((-2, None)),
+            ..Default::default()
+        }
+        .into(),
+        // Later Continuum builds: the drift and a map CRC-32 (46 bytes).
+        c2s::SecurityResponse {
+            continuum: Some((-2, Some(0xDEAD_BEEF))),
             ..Default::default()
         }
         .into(),
@@ -636,6 +643,24 @@ fn documented_lengths() {
     );
     assert_eq!(c2s::Registration::default().to_bytes().len(), 766);
     assert_eq!(c2s::SecurityResponse::default().to_bytes().len(), 40);
+    assert_eq!(
+        c2s::SecurityResponse {
+            continuum: Some((0, None)),
+            ..Default::default()
+        }
+        .to_bytes()
+        .len(),
+        42
+    );
+    assert_eq!(
+        c2s::SecurityResponse {
+            continuum: Some((0, Some(0))),
+            ..Default::default()
+        }
+        .to_bytes()
+        .len(),
+        46
+    );
     assert_eq!(c2s::GoArena::default().to_bytes().len(), 26);
     assert_eq!(c2s::ShootBall::default().to_bytes().len(), 16);
 }
@@ -650,6 +675,21 @@ fn length_dependent_forms() {
     // List packets reject partial entries.
     assert!(S2CPacket::decode(&[0x22, 1]).is_err());
     assert!(S2CPacket::decode(&[0x35]).is_err());
+    // 0x1A: a Continuum response is 42 bytes (drift only, build 0.40) or 46
+    // (drift and map CRC-32). A missing CRC must decode as absent, not as zero.
+    use oss_proto::Packet as _;
+    let cont = |n: usize| match C2SPacket::decode(&{
+        let mut b = c2s::SecurityResponse::default().to_bytes();
+        b.resize(n, 0);
+        b
+    }) {
+        Ok(C2SPacket::SecurityResponse(s)) => s.continuum,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(cont(40), None);
+    assert_eq!(cont(42), Some((0, None)));
+    assert_eq!(cont(46), Some((0, Some(0))));
+
     // Concatenated player records must all be 0x03.
     let mut b = Vec::new();
     player(1).write(&mut b);
