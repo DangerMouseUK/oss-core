@@ -30,7 +30,7 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | Original server's answer to a VIE `00 01` | Open | The original server answers with an undocumented `00 05`; see [transport.md](transport.md#connection-setup) |
 | `00 08` / `00 09` big data, `00 0A` sized transfer, `00 0B`/`00 0C` cancel | Sources | Map downloads use them (live). The ASSS-compatible caps of 64 KiB (big) and 16 MiB (sized) are server limits, not protocol |
 | `00 0E` cluster | Sources | live |
-| `00 10`–`00 14` Continuum key expansion | Partly inferred | Only the shape is documented; the algorithm is not public, so it is not implemented here |
+| `00 10`–`00 14` Continuum key expansion | Partly inferred | Only the shape is documented; the algorithm is not public, so it is not implemented here. The `00 12` / `00 13` shape has since been read from a 0.40 client, which answers without reading the request: see [encryption.md](encryption.md#continuum-shape-only). No server has been observed to send a `00 12` |
 | Retransmission timing, window sizes, pacing of sized transfers | Sources, then our choice | Window 32 receive / 24 send and the 512/520 size limits follow ASSS. The retransmission timeout formula and sized-transfer pacing are our own choices, measured by the [soak harness](../performance.md) |
 
 ## Security checksums ([checksums.md](checksums.md))
@@ -43,7 +43,7 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | Map file CRC-32 in S2C `0x29`, and the `size` field | **Vectors** and observed | The CRC-32 matches the reference server's vectors. The original server advertised the same CRC-32 for the same map to a real client. Its `size` was the length of the whole `0x2A` packet that followed, not the file size |
 | Map checksum for keys ≥ `0x80000000` | **Vectors** for ASSS | ASSS wraps coordinates mod 1024. Whether the Continuum client does the same is **unconfirmed** |
 | VIE exe checksum | **Vectors** | 32 keys (nullspace) |
-| `map_crc32` (Continuum's extra map CRC in C2S `0x1A`) | Partly inferred | From a single source; not checked against a Continuum client |
+| `map_crc32` (Continuum's extra map CRC in C2S `0x1A`) | Partly inferred | From a single source. Build 0.40 does not send it at all — its response is 42 bytes, read from the client's own builder — and no build that does send it has been checked here |
 | Game RNG (`VieRng`: prize and door seeds) | Sources | Park-Miller with the client's +123 step; agrees with the reference server and nullspace. Not checked against a running client |
 
 ## Settings packet ([settings.md](settings.md))
@@ -73,7 +73,7 @@ All S2C and C2S packets round-trip in oss-core's tests and in the conformance ve
 | C2S `0x01`, `0x02`, `0x05`–`0x08`, `0x0A`–`0x10`, `0x13`–`0x16`, `0x18`, `0x19`, `0x1C`–`0x21`, `0x32` | Sources | Some of these are also live (`0x01`, `0x03`, `0x0C`) |
 | C2S `0x09`/`0x24` login | Partly inferred | `unknown1`, the upper half of field 444 (client feature flags in one server), and the 12 reserved bytes (redirect data in one server) are kept raw |
 | C2S `0x17` registration | Partly inferred | Layout from sources; the 13 hardware strings are free text whose meaning varies between clients |
-| C2S `0x1A` security response | **Vectors** for the checksums, Sources for the layout | The Continuum timer-drift field is from a single source |
+| C2S `0x1A` security response | **Vectors** for the checksums, Sources for the layout | The Continuum timer drift is confirmed by build 0.40's own response builder, which sends it and stops there, for 42 bytes. The map CRC-32 that later builds append is still from a single source |
 | C2S `0x1B` security violation | Partly inferred | The trailing message is optional and its contents are not specified |
 | Voice (S2C `0x0C`, C2S `0x0E`) | Partly inferred | The compressed WAV payload is opaque here |
 

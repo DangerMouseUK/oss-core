@@ -445,7 +445,7 @@ fn security_response() -> impl Strategy<Value = SecurityResponse> {
         (
             any::<u16>(),
             any::<u8>(),
-            option::of((any::<i16>(), any::<u32>())),
+            option::of((any::<i16>(), option::of(any::<u32>()))),
         ),
     )
         .prop_map(

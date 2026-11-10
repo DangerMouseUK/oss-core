@@ -6,10 +6,10 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 |---|---|
 | Direction | client → server |
 | Type | `0x1A` |
-| Length | 40 or 46 bytes |
+| Length | 40, 42 or 46 bytes |
 | oss-proto | `c2s::SecurityResponse` |
 | Evidence | **Vectors** |
-| Conformance | 2 vectors in [`oss-conformance`](../../conformance.md) |
+| Conformance | 3 vectors in [`oss-conformance`](../../conformance.md) |
 
 ## Layout
 
@@ -31,7 +31,7 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | 37 | 2 | u16 | ping_high |  |
 | 39 | 1 | u8 | slow_frame |  |
 | 40 | 2 | i16 | timer_drift | Continuum only |
-| 42 | 4 | u32 | map_crc32 | Continuum only |
+| 42 | 4 | u32 | map_crc32 | Continuum, later builds only |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
@@ -39,6 +39,8 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 The checksum algorithms are in [checksums.md](../checksums.md).
 
+Continuum always sends the timer drift. Build 0.40 stops there, for 42 bytes; later builds append the map CRC-32, for 46. A server must accept both lengths, and must not read an absent CRC as a zero one.
+
 ## Evidence
 
-**Vectors.** The settings, map and exe checksums it carries are vector-verified (`clientset-*.txt`, `map-checksum-*.txt`, `vie-exe-checksum.txt`) and checked live by the conformance suite; the Continuum fields come from a single source. See [verification.md](../verification.md) for the levels.
+**Vectors.** The settings, map and exe checksums it carries are vector-verified (`clientset-*.txt`, `map-checksum-*.txt`, `vie-exe-checksum.txt`) and checked live by the conformance suite; the Continuum fields come from a single source. The 42-byte form is read from build 0.40's own response builder, which ends by sending 42 bytes out of a buffer it cleared as ten dwords and a word. See [verification.md](../verification.md) for the levels.
