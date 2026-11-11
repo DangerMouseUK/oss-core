@@ -50,7 +50,9 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("Burst:BurstDamageLevel", Use::Read("burst_damage_level")),
     (
         "Chat:MessageReliable",
-        Use::NotYet("chat is always sent reliably"),
+        Use::NotYet(
+            "whether chat is sent reliably. Known, not unknown: this client always sends it reliably. Wiring it is an oss-client change, picking the reliable or unreliable send for C2S 0x06 from this flag",
+        ),
     ),
     ("Door:DoorDelay", Use::Read("door_delay")),
     ("Door:DoorMode", Use::Read("door_mode")),
@@ -78,7 +80,9 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ),
     (
         "Flag:FlagDropResetReward",
-        Use::NotYet("a kill reward that resets the flag drop timer"),
+        Use::NotYet(
+            "least kill reward that resets a carrier's `Flag:FlagDropDelay` timer. The kill packet (S2C 0x06) carries no reward, so whether Continuum scores the kill itself or waits for the score update (S2C 0x09) is unrecorded, and so is which side holds the timer. Settled by watching a Continuum carrier's drop timer across kills whose reward sits just above and just below the setting",
+        ),
     ),
     (
         "Flag:FlaggerBombFireDelay",
@@ -141,7 +145,9 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ),
     (
         "Latency:S2CNoDataKickoutDelay",
-        Use::NotYet("the transport's own timeout is used"),
+        Use::NotYet(
+            "ticks without server data before the client gives up. oss-net's own timeout is used instead; wiring it means handing oss-net this arena value",
+        ),
     ),
     (
         "Latency:SendRoutePercent",
@@ -160,14 +166,24 @@ pub const COVERAGE: &[(&str, Use)] = &[
             "activate_app_shutdown_time()",
         ),
     ),
-    ("Misc:AllowSavedShips", Use::NotYet("saved-ship option")),
+    (
+        "Misc:AllowSavedShips",
+        Use::NotYet(
+            "whether a ship and its prizes survive an arena change or a lagout. The saved ship lives on the server, so this is most likely an oss-server rule rather than sim work",
+        ),
+    ),
     (
         "Misc:AntiWarpSettleDelay",
         Use::Read("anti_warp_settle_delay"),
     ),
     ("Misc:BounceFactor", Use::Read("bounce_factor")),
     ("Misc:DecoyAliveTime", Use::Read("decoy_alive_time")),
-    ("Misc:DisableBallKilling", Use::NotYet("ball-killing rule")),
+    (
+        "Misc:DisableBallKilling",
+        Use::NotYet(
+            "whether a ball carrier can be killed. A simulation rule, but oss-sim carries no ball yet: the soccer settings it reads only cover throwing and ball speed",
+        ),
+    ),
     (
         "Misc:DisableBallThroughWalls",
         Use::Read("disable_ball_through_walls"),
@@ -185,20 +201,24 @@ pub const COVERAGE: &[(&str, Use)] = &[
             "whether other (non-staff) players receive your extra position data (energy, items, timers); mostly the receive side",
         ),
     ),
-    ("Misc:FrequencyShift", Use::NotYet("meaning not confirmed")),
     (
-        "Misc:MaxTimerDrift",
-        Use::NotYet("timer drift check (anti-cheat)"),
-    ),
-    (
-        "Misc:NearDeathLevel",
+        "Misc:FrequencyShift",
         Use::NotYet(
-            "energy at which a ship has a near death and loses 1 bounty (duelling zones); a sim rule, not a warning",
+            "random pitch shift applied to sound effects (0-10000). The unit, and whether the shift is drawn per sound or per player, has never been recorded. Audio only, no simulation effect. Settled by recording Continuum's weapon sounds at 0 and at 10000",
         ),
     ),
     (
+        "Misc:MaxTimerDrift",
+        Use::NotYet(
+            "how far a client's clock may drift from the server's. An oss-server anti-cheat tolerance (see oss-sim's `validate`), not a rule the simulation runs",
+        ),
+    ),
+    ("Misc:NearDeathLevel", Use::Read("near_death_level")),
+    (
         "Misc:SafetyLimit",
-        Use::NotYet("ticks a ship may spend in a safe zone"),
+        Use::NotYet(
+            "ticks a ship may spend in a safe zone. The limit is recorded; what Continuum does when it runs out (kill, warp out, warn only) is not. Settled by sitting in a safe zone past a short SafetyLimit in Continuum and recording what happens to the ship",
+        ),
     ),
     (
         "Misc:SendPositionDelay",
@@ -206,10 +226,22 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ),
     (
         "Misc:SlowFrameCheck",
-        Use::NotYet("frame-rate check (anti-cheat)"),
+        Use::NotYet(
+            "whether the client reports slow frames (a cheat check Continuum's own docs call flawed). A client and server rule with no effect on the simulation",
+        ),
     ),
-    ("Misc:TickerDelay", Use::NotYet("ticker text scrolling")),
-    ("Misc:VictoryMusic", Use::NotYet("victory music")),
+    (
+        "Misc:TickerDelay",
+        Use::NotYet(
+            "ticks between ticker help messages. The delay is clear; the list of messages Continuum cycles through is not recorded anywhere. Settled by watching a Continuum client's ticker for a full cycle and writing the messages down",
+        ),
+    ),
+    (
+        "Misc:VictoryMusic",
+        Use::NotYet(
+            "whether the zone plays victory music; audio only, and oss-client has no sound",
+        ),
+    ),
     ("Misc:WarpPointDelay", Use::Read("warp_point_delay")),
     ("Misc:WarpRadiusLimit", Use::Read("warp_radius_limit")),
     ("Prize:DeathPrizeTime", Use::Read("death_prize_time")),
@@ -268,12 +300,14 @@ pub const COVERAGE: &[(&str, Use)] = &[
     (
         "Radar:RadarMode",
         Use::NotYet(
-            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the radar layout itself, which half or quarter you see and whether teammates show through it, is not done",
+            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the blinding itself, which half or quarter you see and whether teammates show through it, has never been recorded. Settled by radar screenshots from a Continuum client in each of the five modes, on both sides of the map",
         ),
     ),
     (
         "Radar:RadarNeutralSize",
-        Use::NotYet("neutral zone on the radar"),
+        Use::NotYet(
+            "pixels of neutral space between the blinded radar zones of `Radar:RadarMode` 1-4. The blinding itself has never been recorded, so there is no gap for this to size. Settled by the same Continuum observation as `Radar:RadarMode`: radar screenshots of each mode at two very different neutral sizes",
+        ),
     ),
     ("Repel:RepelDistance", Use::Read("repel_distance")),
     ("Repel:RepelSpeed", Use::Read("repel_speed")),
@@ -305,12 +339,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("Ship:BurstSpeed", Use::Read("burst_speed")),
     ("Ship:CloakEnergy", Use::Read("cloak_energy")),
     ("Ship:CloakStatus", Use::Read("cloak_status")),
-    (
-        "Ship:DamageFactor",
-        Use::NotYet(
-            "how likely a hit makes the ship lose a prize: 0 = never, 1 = very likely, 5000 = almost never (higher is safer; not a damage multiplier)",
-        ),
-    ),
+    ("Ship:DamageFactor", Use::Read("damage_factor")),
     ("Ship:DecoyMax", Use::Read("decoy_max")),
     (
         "Ship:DisableFastShooting",
@@ -353,10 +382,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     ("Ship:MultiFireDelay", Use::Read("multi_fire_delay")),
     ("Ship:MultiFireEnergy", Use::Read("multi_fire_energy")),
     ("Ship:PortalMax", Use::Read("portal_max")),
-    (
-        "Ship:PrizeShareLimit",
-        Use::NotYet("highest bounty at which the ship still receives team prizes"),
-    ),
+    ("Ship:PrizeShareLimit", Use::Read("prize_share_limit")),
     ("Ship:Radius", Use::Read("radius")),
     ("Ship:RepelMax", Use::Read("repel_max")),
     ("Ship:RocketMax", Use::Read("rocket_max")),
