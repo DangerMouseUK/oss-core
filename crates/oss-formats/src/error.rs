@@ -37,6 +37,14 @@ pub enum FormatError {
         /// Byte offset of the section.
         offset: usize,
     },
+    /// The data is well formed but this crate does not know how to read it, and
+    /// will not guess. Refusing is deliberate: a wrong reading is worse than none.
+    Unsupported {
+        /// What could not be read.
+        what: &'static str,
+        /// Byte offset of the field that could not be read.
+        offset: usize,
+    },
 }
 
 impl fmt::Display for FormatError {
@@ -52,6 +60,9 @@ impl fmt::Display for FormatError {
             }
             Self::Decompress { offset } => {
                 write!(f, "compressed section at offset {offset} is corrupt")
+            }
+            Self::Unsupported { what, offset } => {
+                write!(f, "{what} at offset {offset} cannot be read")
             }
         }
     }
