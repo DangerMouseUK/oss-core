@@ -16,19 +16,30 @@
 //! ([`ObjectSection`]). Compressed bytes are kept as read, so archives rewrite
 //! byte for byte; [`Section::data`] inflates on demand.
 //!
-//! # `CLV1` screen objects are refused
+//! # `CLV1` screen objects
 //!
-//! An object section is tagged `CLV1` or `CLV2`. [`ObjectData`]'s screen split —
-//! reference point in bits 0-3, signed 12-bit offset in bits 4-15 — is the `CLV2`
-//! layout, and a real Continuum client applies it to `CLV2` sections only: twelve
-//! `CLV1` screen objects written with distinct reference indices and offset 0
-//! rendered in a diagonal cascade at (0,0), (1,1) … (11,11), while the same objects
-//! written as `CLV2` rendered at twelve distinct reference points. What a `CLV1`
-//! screen object's words *do* mean is not known, so [`ObjectSection::parse`] returns
-//! [`FormatError::Unsupported`] for a `CLV1` section that holds one, rather than
-//! placing it somewhere wrong.
+//! An object section is tagged `CLV1` or `CLV2`, and the two do not share a screen
+//! layout. [`ObjectData`]'s `CLV2` split is reference index in bits 0-3 and signed
+//! 12-bit offset in bits 4-15; **`CLV1` is the mirror of it** — reference in bits
+//! 12-15, offset in bits 0-11 — with only three reference points instead of twelve
+//! ([`Clv1Reference`]). Both were measured from a real Continuum client, the second
+//! at two view sizes.
 //!
-//! `CLV1` *map* objects are read as usual: a map object's words are a plain signed
+//! Reading a `CLV1` word with the `CLV2` split is how Trench Wars' `entermsg.lvz`
+//! banner came to be drawn 613 px too far right: `x_word = 0x4CF4` is "reference 4,
+//! offset +1231" under `CLV2` and x = 1257, where Continuum draws it at 644
+//! (`CentredBox` 1424 − 780 at a 1888-wide view).
+//!
+//! Because that mis-read is silent and costly, the layouts are kept apart by the
+//! parser rather than by convention:
+//!
+//! * [`ObjectSection::parse`] **refuses** a `CLV1` section holding a screen object,
+//!   with [`FormatError::Unsupported`]. A caller written against the `CLV2`
+//!   accessors cannot place such an object wrongly, because it never receives one.
+//! * [`ObjectSection::parse_with_clv1`] hands them over, for callers that read
+//!   positions through [`ObjectData::clv1_screen_position`] and friends.
+//!
+//! `CLV1` *map* objects are read by both: a map object's words are a plain signed
 //! pixel coordinate under either layout, and the `CLV1` map objects in real zone
 //! files (Trench Wars' `pubtiles.lvz` and `pubcover.lvz`) read as sensible
 //! tile-aligned map positions.
@@ -37,7 +48,7 @@ use alloc::vec::Vec;
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
-pub use oss_proto::ObjectData;
+pub use oss_proto::{CLV1_BOX, Clv1Reference, ObjectData, ObjectLayout};
 
 use crate::FormatError;
 use crate::error::u32_at;
@@ -224,8 +235,43 @@ pub struct ObjectSection {
 }
 
 impl ObjectSection {
-    /// Parses inflated object-section data.
+    /// Which screen layout this section's objects use.
+    pub fn layout(&self) -> ObjectLayout {
+        if self.version == CLV1 {
+            ObjectLayout::Clv1
+        } else {
+            ObjectLayout::Clv2
+        }
+    }
+
+    /// Parses inflated object-section data, refusing `CLV1` screen objects.
+    ///
+    /// Use this unless the caller reads screen positions through
+    /// [`ObjectData::clv1_screen_position`]: a `CLV1` screen object read with the
+    /// `CLV2` accessors lands in the wrong place, so this returns
+    /// [`FormatError::Unsupported`] rather than handing one over. See the module
+    /// docs. [`ObjectSection::parse_with_clv1`] is the same parser without the
+    /// refusal.
     pub fn parse(data: &[u8]) -> Result<Self, FormatError> {
+        let section = Self::parse_with_clv1(data)?;
+        if section.layout() == ObjectLayout::Clv1
+            && let Some(i) = section.objects.iter().position(|o| !o.is_map_object())
+        {
+            return Err(FormatError::Unsupported {
+                what: "LVZ CLV1 screen object",
+                offset: 12 + i * ObjectData::LEN,
+            });
+        }
+        Ok(section)
+    }
+
+    /// Parses inflated object-section data, `CLV1` screen objects included.
+    ///
+    /// Their positions come from [`ObjectData::clv1_screen_position`] and the other
+    /// `clv1_*` accessors, **not** from [`ObjectData::screen_x`] and friends, which
+    /// are the `CLV2` reading and would place them wrongly. [`ObjectSection::layout`]
+    /// says which applies.
+    pub fn parse_with_clv1(data: &[u8]) -> Result<Self, FormatError> {
         let magic = data.get(..4).ok_or(FormatError::Truncated {
             what: "LVZ objects",
             offset: 0,
@@ -254,16 +300,6 @@ impl ObjectSection {
             .iter()
             .map(|c| ObjectData::from_bytes(*c))
             .collect();
-        // A `CLV1` screen object's position words are not understood (see the
-        // module docs). Refuse rather than place it somewhere wrong.
-        if version == CLV1
-            && let Some(i) = objects.iter().position(|o| !o.is_map_object())
-        {
-            return Err(FormatError::Unsupported {
-                what: "LVZ CLV1 screen object",
-                offset: 12 + i * ObjectData::LEN,
-            });
-        }
         let mut pos = obj_end;
         let mut images = Vec::new();
         for _ in 0..n_img {
@@ -421,20 +457,27 @@ mod tests {
             })
         );
 
+        // parse_with_clv1 hands the same section over, decoded.
+        let back = ObjectSection::parse_with_clv1(&mixed).unwrap();
+        assert_eq!(back.layout(), ObjectLayout::Clv1);
+        assert_eq!(back.objects[0].map_x(), 6752);
+        assert_eq!(back.objects[1].clv1_x_ref(), Clv1Reference::CentredBox);
+
         // The same words under a CLV2 tag are read as reference + offset.
         let mut clv2 = mixed.clone();
         clv2[..4].copy_from_slice(&CLV2);
         let back = ObjectSection::parse(&clv2).unwrap();
+        assert_eq!(back.layout(), ObjectLayout::Clv2);
         assert_eq!(back.objects[1].x_ref(), 4);
         assert_eq!(back.objects[1].screen_x(), 1231);
     }
 
-    /// Trench Wars' `entermsg.lvz`, the file this refusal exists for: a `CLV1`
+    /// Trench Wars' `entermsg.lvz`, the file all of this exists for: a `CLV1`
     /// section whose one screen object has `x_word = 0x4CF4`, `y_word = 0x0064`.
-    /// Read with the `CLV2` layout that is "reference 4, offset +1231", which put
-    /// the entry banner off-screen in our client. We now decline to place it.
+    /// Read with the `CLV2` layout that is "reference 4, offset +1231" and the
+    /// banner lands at x = 1257; Continuum draws it at 644.
     #[test]
-    fn the_trench_wars_entry_banner_is_refused_not_misplaced() {
+    fn the_trench_wars_entry_banner_lands_where_continuum_draws_it() {
         let mut data = alloc::vec![];
         data.extend_from_slice(&CLV1);
         data.extend_from_slice(&1u32.to_le_bytes()); // one object
@@ -446,6 +489,8 @@ mod tests {
         data.extend_from_slice(&((2u16 << 12) | 90).to_le_bytes()); // EnterArena, 90
         data.extend_from_slice(&[1, 0, 1, 0, 0, 0]); // 1x1 frames, no animation
         data.extend_from_slice(b"entermsg.jpg\0");
+
+        // The default parser still declines to hand it to a CLV2 reader.
         assert_eq!(
             ObjectSection::parse(&data),
             Err(FormatError::Unsupported {
@@ -453,5 +498,75 @@ mod tests {
                 offset: 12,
             })
         );
+
+        // Read as CLV1 it is group 1 (the centred box) minus 780 in x, and the
+        // view's top-left plus 100 in y.
+        let section = ObjectSection::parse_with_clv1(&data).unwrap();
+        assert_eq!(section.layout(), ObjectLayout::Clv1);
+        let o = section.objects[0];
+        assert!(!o.is_map_object());
+        assert_eq!(o.clv1_x_ref(), Clv1Reference::CentredBox);
+        assert_eq!(o.clv1_screen_x(), -780);
+        assert_eq!(o.clv1_y_ref(), Clv1Reference::TopLeft);
+        assert_eq!(o.clv1_screen_y(), 100);
+
+        // Measured in Continuum at 1888x1016: the 600x250 banner's top-left is
+        // (644, 100). The other two sizes are the same arithmetic, and all three
+        // put the whole banner on screen -- including 1280x800, where reading the
+        // word as CLV2 (x = 1257) is what clipped it.
+        assert_eq!(o.clv1_screen_position(1888, 1016), (644, 100));
+        assert_eq!(o.clv1_screen_position(1920, 1080), (660, 100));
+        assert_eq!(o.clv1_screen_position(1280, 800), (340, 100));
+        assert_eq!(o.screen_x(), 1231, "the CLV2 reading, which is the bug");
+    }
+
+    /// The reference table, from a real Continuum client at two view sizes.
+    #[test]
+    fn clv1_reference_table() {
+        let at = |nibble: u8, offset: i16, w: i32, h: i32| {
+            let word = (u16::from(nibble) << 12) | (offset as u16 & 0xFFF);
+            let o = ObjectData {
+                x_word: word,
+                y_word: word,
+                ..ObjectData::default()
+            };
+            o.clv1_screen_position(w, h)
+        };
+
+        // Offset 0 reads the reference point itself. Group 0 is the view's
+        // top-left, group 2 its bottom-right, and group 1 the bottom-right corner
+        // of a 960x960 box centred in the view.
+        for n in 0..=3 {
+            assert_eq!(at(n, 0, 1888, 1016), (0, 0), "nibble {n}");
+            assert_eq!(at(n, 0, 1920, 1080), (0, 0), "nibble {n}");
+        }
+        for n in 4..=7 {
+            assert_eq!(at(n, 0, 1888, 1016), (1424, 988), "nibble {n}");
+            assert_eq!(at(n, 0, 1920, 1080), (1440, 1020), "nibble {n}");
+        }
+        for n in 8..=15 {
+            assert_eq!(at(n, 0, 1888, 1016), (1888, 1016), "nibble {n}");
+            assert_eq!(at(n, 0, 1920, 1080), (1920, 1080), "nibble {n}");
+        }
+
+        // Probes that were not used to fit the centred-box rule: at 1920x1080,
+        // x at offset -700 lands on 740 and y at offset -500 on 520.
+        assert_eq!(at(4, -700, 1920, 1080).0, 740);
+        assert_eq!(at(4, -500, 1920, 1080).1, 520);
+
+        // The last nibble of each of the two upper groups does not carry into the
+        // group when the offset is negative: 1424 - 1 and 1888 - 1.
+        assert_eq!(at(7, -1, 1888, 1016).0, 1423);
+        assert_eq!(at(11, -1, 1888, 1016).0, 1887);
+
+        // Nibble 3 is read uniformly as group 0, which is where we knowingly
+        // differ from Continuum: it would put a negative offset on group 1
+        // (1424 - 100 = 1324) and draw nothing below about -1385.
+        assert_eq!(at(3, 100, 1888, 1016).0, 100);
+        assert_eq!(at(3, -100, 1888, 1016).0, -100);
+
+        // Offsets are signed 12-bit, so they wrap at the edges of that range.
+        assert_eq!(at(0, 2047, 1888, 1016).0, 2047);
+        assert_eq!(at(0, -2048, 1888, 1016).0, -2048);
     }
 }

@@ -79,6 +79,10 @@ pub mod reference {
 /// |     | 1-15  | object id |
 /// | 2-3 | | map: x in pixels (`i16`); screen: reference (4 bits) + x offset (signed 12 bits) |
 /// | 4-5 | | same for y |
+///
+/// The screen split above is the **`CLV2`** one, reference in bits 0-3. A `CLV1`
+/// section mirrors it -- reference in bits 12-15, offset in bits 0-11 -- and has its
+/// own accessors ([`clv1_x_ref`](Self::clv1_x_ref) and friends). See [`ObjectLayout`].
 /// | 6 | | image index |
 /// | 7 | | [`layer`] |
 /// | 8-9 | 0-11 | display time (1/10 s, 0 = forever) |
@@ -101,6 +105,69 @@ pub struct ObjectData {
 
 fn sign12(v: u16) -> i16 {
     ((v << 4) as i16) >> 4
+}
+
+/// Which layout an object section's screen position words use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectLayout {
+    /// `CLV2`: reference index in bits 0-3, signed 12-bit offset in bits 4-15,
+    /// the reference being one of the twelve HUD points in [`reference`](mod@reference).
+    Clv2,
+    /// `CLV1`: the mirror of `CLV2` — reference in bits 12-15, signed 12-bit offset
+    /// in bits 0-11 — and only three reference points ([`Clv1Reference`]).
+    Clv1,
+}
+
+/// Side of the square box whose bottom-right corner is [`Clv1Reference::CentredBox`].
+///
+/// What this box *is* has not been established; the arithmetic is what was measured.
+pub const CLV1_BOX: i32 = 960;
+
+/// The reference point a `CLV1` screen object hangs from. Unlike `CLV2`'s twelve HUD
+/// anchors there are only three, and they depend on the view size alone, so this crate
+/// can resolve them without knowing anything about the HUD.
+///
+/// Measured from a real Continuum client at two view sizes (1888x1016 and 1920x1080).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Clv1Reference {
+    /// Reference nibble 0-3: the top-left of the view, `(0, 0)`.
+    TopLeft,
+    /// Reference nibble 4-7: the bottom-right corner of a [`CLV1_BOX`]-square box
+    /// centred in the view, `((w + 960) / 2, (h + 960) / 2)`.
+    CentredBox,
+    /// Reference nibble 8-15: the bottom-right of the view, `(w, h)`.
+    BottomRight,
+}
+
+impl Clv1Reference {
+    /// The reference a nibble selects. Nibbles 0-3 are read uniformly as
+    /// [`TopLeft`](Self::TopLeft); see [`ObjectData::clv1_x_ref`] for the one place
+    /// that knowingly differs from Continuum.
+    pub const fn from_nibble(n: u8) -> Self {
+        match n & 0xF {
+            0..=3 => Self::TopLeft,
+            4..=7 => Self::CentredBox,
+            _ => Self::BottomRight,
+        }
+    }
+
+    /// Where this reference sits in a view `width` x `height` pixels.
+    pub const fn point(self, width: i32, height: i32) -> (i32, i32) {
+        match self {
+            Self::TopLeft => (0, 0),
+            Self::CentredBox => ((width + CLV1_BOX) / 2, (height + CLV1_BOX) / 2),
+            Self::BottomRight => (width, height),
+        }
+    }
+
+    /// One axis of [`point`](Self::point), for a view `extent` pixels along it.
+    pub const fn axis(self, extent: i32) -> i32 {
+        match self {
+            Self::TopLeft => 0,
+            Self::CentredBox => (extent + CLV1_BOX) / 2,
+            Self::BottomRight => extent,
+        }
+    }
 }
 
 impl ObjectData {
@@ -174,6 +241,58 @@ impl ObjectData {
     pub fn screen_y(&self) -> i16 {
         sign12(self.y_word >> 4)
     }
+    /// Screen object x reference point under the **`CLV1`** layout: the top nibble
+    /// of the word.
+    ///
+    /// # Nibble 3
+    ///
+    /// Continuum is self-inconsistent here and this reads it uniformly as
+    /// [`Clv1Reference::TopLeft`]. Observed behaviour, measured at one view size: with
+    /// a non-negative offset nibble 3 uses the top-left, with a negative offset down to
+    /// about -1375 it uses [`Clv1Reference::CentredBox`], and below about -1385 the
+    /// object is not drawn at all. The boundary is on the offset, not on where the
+    /// object lands, and neighbouring nibbles (7, 11) do not behave this way, so it is
+    /// not a carry out of the offset's sign bit. Nobody has explained it.
+    ///
+    /// It is not reproduced because the two thresholds were only ever bracketed
+    /// ("about -1375", "about -1385") at a single view size, so reproducing the cull
+    /// would mean inventing exact constants that were never measured, and presenting a
+    /// mystery as deliberate behaviour. No file in any zone we hold uses nibble 3 with a
+    /// negative offset. **A real file that does would be reason to revisit this.**
+    pub fn clv1_x_ref(&self) -> Clv1Reference {
+        Clv1Reference::from_nibble((self.x_word >> 12) as u8)
+    }
+
+    /// Screen object y reference point under the `CLV1` layout (see
+    /// [`clv1_x_ref`](Self::clv1_x_ref)).
+    pub fn clv1_y_ref(&self) -> Clv1Reference {
+        Clv1Reference::from_nibble((self.y_word >> 12) as u8)
+    }
+
+    /// Screen object x offset from [`clv1_x_ref`](Self::clv1_x_ref): the low twelve
+    /// bits of the word, signed.
+    pub fn clv1_screen_x(&self) -> i16 {
+        sign12(self.x_word & 0xFFF)
+    }
+
+    /// Screen object y offset from [`clv1_y_ref`](Self::clv1_y_ref).
+    pub fn clv1_screen_y(&self) -> i16 {
+        sign12(self.y_word & 0xFFF)
+    }
+
+    /// Where a `CLV1` screen object is drawn in a view `width` x `height` pixels: its
+    /// reference point plus its offset, in view pixels. The result is not clamped --
+    /// Continuum simply does not draw an object that falls outside the view.
+    ///
+    /// Only meaningful for a screen object from a `CLV1` section; a map object's
+    /// position is [`map_x`](Self::map_x) / [`map_y`](Self::map_y) under either layout.
+    pub fn clv1_screen_position(&self, width: i32, height: i32) -> (i32, i32) {
+        (
+            self.clv1_x_ref().axis(width) + i32::from(self.clv1_screen_x()),
+            self.clv1_y_ref().axis(height) + i32::from(self.clv1_screen_y()),
+        )
+    }
+
     /// Display time in 1/10 s (0 = forever).
     pub fn display_time(&self) -> u16 {
         get_bits(self.time_mode.into(), 0, 12) as u16
