@@ -16,6 +16,7 @@
 //!   [`Cipher::handle_core`], which may send replies (e.g. key-expansion
 //!   requests/responses) through [`CipherContext`].
 
+use crate::ticks;
 use crate::vie::{self, VieCipher};
 
 /// A per-connection packet transform applied to whole datagrams.
@@ -327,6 +328,20 @@ const REMEMBERED_PREFIX: usize = 8;
 /// Client-side VIE handshake: sends `00 01` (resending every
 /// [`VieClientHandshake::RESEND_MS`]) until the server answers `00 02`.
 ///
+/// Some servers put a liveness challenge in front of that answer and send nothing
+/// else until it is echoed back:
+///
+/// ```text
+/// C->S  00 01 <client key u32> <version u16>
+/// S->C  00 05 <id u32>                        6 bytes, not the 14-byte sync request
+/// C->S  00 06 <id u32> <own time u32>
+/// S->C  00 02 <server key u32> [00]
+/// ```
+///
+/// This answers it. Measured against subgame 1.34.14 by black-box probing; it is in
+/// no documentation, most likely because a client whose core-packet router is already
+/// running during setup answers the challenge without noticing it exists.
+///
 /// Anything else that arrives during setup is remembered rather than dropped
 /// silently, so that a handshake which times out can say whether it heard nothing
 /// at all or heard something it could not use. See
@@ -356,12 +371,23 @@ impl VieClientHandshake {
     }
 
     /// Requests an unencrypted session (client key 0).
+    ///
+    /// Correct for ASSS. **Subgame ignores any client key below 1024** — bisected
+    /// against subgame 1.34.14, which stays silent at 1023 and answers at 1024 — so a
+    /// key of 0 never gets a reply there, and the handshake times out.
     pub fn unencrypted() -> Self {
         Self::with_key(0, 0x01)
     }
 
     /// A handshake with an explicit key and protocol word (`0x01` SubSpace,
     /// `0x11` Continuum — only useful against servers that fall back to VIE).
+    ///
+    /// Two keys to avoid. **`0x8000_0000` is a trap**: the VIE server key derived from
+    /// it is itself, so the reply is indistinguishable from a server echoing the key
+    /// back to refuse encryption, and the session is set up with [`NullCipher`] while
+    /// the server encrypts. [`VieClientHandshake::new`] cannot produce it.
+    /// **Keys below 1024** are ignored outright by subgame (see
+    /// [`unencrypted`](Self::unencrypted)).
     pub fn with_key(key: u32, protocol: u16) -> Self {
         Self {
             key,
@@ -438,8 +464,8 @@ impl VieClientHandshake {
                  acknowledgement (00 04) without answering it"
             }
             [0, 5, ..] => {
-                "no usable answer to the connection request: the server sent a \
-                 sync request (00 05) without answering it"
+                "no usable answer to the connection request: the server sent a 00 05 \
+                 too short to hold the id this handshake would have echoed back"
             }
             [0, 6, ..] => {
                 "no usable answer to the connection request: the server sent a \
@@ -474,7 +500,7 @@ impl VieClientHandshake {
 }
 
 impl Handshake for VieClientHandshake {
-    fn on_datagram(&mut self, _now: u64, data: &[u8], _out: &mut Vec<Vec<u8>>) -> Step {
+    fn on_datagram(&mut self, now: u64, data: &[u8], out: &mut Vec<Vec<u8>>) -> Step {
         match data {
             [0, 2, a, b, c, d, ..] => {
                 let server_key = u32::from_le_bytes([*a, *b, *c, *d]);
@@ -489,6 +515,16 @@ impl Handshake for VieClientHandshake {
                     self.remember(data);
                     Step::Pending
                 }
+            }
+            // The liveness challenge: echo the id back, or the server sends
+            // nothing more. Any length from 6 up, since the id is all it wants;
+            // `Connection` answers the same packet the same way once the session
+            // is established, with the same timestamp.
+            [0, 5, a, b, c, d, ..] => {
+                let mut reply = vec![0, 6, *a, *b, *c, *d];
+                reply.extend_from_slice(&ticks(now).to_le_bytes());
+                out.push(reply);
+                Step::Pending
             }
             [0, 7] => Step::Failed("server refused the connection"),
             _ => {
@@ -518,6 +554,76 @@ impl Handshake for VieClientHandshake {
 mod tests {
     use super::*;
 
+    /// Subgame's sequence: the connect request draws a `00 05` liveness
+    /// challenge, and the server says nothing more until the id comes back in a
+    /// `00 06`. Measured against subgame 1.34.14.
+    #[test]
+    fn the_liveness_challenge_is_answered_and_the_handshake_completes() {
+        let mut out = Vec::new();
+        let mut c = VieClientHandshake::new(7);
+
+        // 00 01 <key> <protocol>.
+        assert!(matches!(c.poll(0, &mut out), Step::Pending));
+        assert_eq!(out.len(), 1);
+        assert_eq!(&out[0][..2], &[0, 1]);
+        let key = u32::from_le_bytes([out[0][2], out[0][3], out[0][4], out[0][5]]);
+        out.clear();
+
+        // 00 05 <id>: echo the id, keep waiting, and don't count it as something
+        // we failed to understand.
+        let challenge = [0u8, 5, 0xEF, 0xBE, 0xAD, 0xDE];
+        assert!(matches!(
+            c.on_datagram(250, &challenge, &mut out),
+            Step::Pending
+        ));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0][..6], [0, 6, 0xEF, 0xBE, 0xAD, 0xDE]);
+        assert_eq!(out[0].len(), 10);
+        assert_eq!(out[0][6..], ticks(250).to_le_bytes());
+        assert_eq!(c.unrecognised_count(), 0);
+        out.clear();
+
+        // Then the real answer, in the 7-byte form subgame sends.
+        let mut reply = vec![0u8, 2];
+        reply.extend_from_slice(&vie::server_key_for(key).to_le_bytes());
+        reply.push(0);
+        let Step::Established(cipher) = c.on_datagram(300, &reply, &mut out) else {
+            panic!("should have established");
+        };
+        assert_eq!(cipher.name(), "vie");
+        assert!(out.is_empty());
+    }
+
+    /// The challenge is answered whatever trails the id, and a `00 05` too short
+    /// to hold one is still reported rather than dropped.
+    #[test]
+    fn challenge_length_is_tolerated_both_ways() {
+        let mut out = Vec::new();
+        let mut c = VieClientHandshake::new(7);
+        assert!(matches!(c.poll(0, &mut out), Step::Pending));
+        out.clear();
+
+        // The 14-byte sync request carries the same id in the same place.
+        let long = [0u8, 5, 1, 2, 3, 4, 9, 9, 9, 9, 8, 8, 8, 8];
+        assert!(matches!(c.on_datagram(100, &long, &mut out), Step::Pending));
+        assert_eq!(out[0][..6], [0, 6, 1, 2, 3, 4]);
+        out.clear();
+
+        // Too short to hold an id: nothing to echo, so it is remembered and named.
+        let mut c = VieClientHandshake::new(7).timeout(1000);
+        assert!(matches!(c.poll(0, &mut out), Step::Pending));
+        assert!(matches!(
+            c.on_datagram(10, &[0, 5, 1], &mut out),
+            Step::Pending
+        ));
+        assert_eq!(c.unrecognised_count(), 1);
+        let Step::Failed(why) = c.poll(2000, &mut out) else {
+            panic!("should have timed out");
+        };
+        assert!(why.contains("00 05"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+    }
+
     /// A handshake that hears nothing and one that hears the wrong thing must not
     /// give the same reason: the first sends a reader to the network, the second
     /// to the protocol. This is the bug this test exists for.
@@ -534,12 +640,13 @@ mod tests {
         assert_eq!(quiet.unrecognised_count(), 0);
         assert_eq!(quiet.unrecognised().count(), 0);
 
-        // The server answered every request -- with something unusable.
+        // The server answered every request -- with something unusable. (00 03
+        // rather than 00 05, which is now answered rather than dropped.)
         let mut talked_to = VieClientHandshake::new(1).timeout(1000);
         assert!(matches!(talked_to.poll(0, &mut out), Step::Pending));
         for _ in 0..3 {
             assert!(matches!(
-                talked_to.on_datagram(10, &[0, 5, 1, 2, 3, 4], &mut out),
+                talked_to.on_datagram(10, &[0, 3, 1, 2, 3, 4], &mut out),
                 Step::Pending
             ));
         }
@@ -547,7 +654,7 @@ mod tests {
             panic!("should have timed out");
         };
         assert!(
-            why.contains("the server sent a sync request (00 05)"),
+            why.contains("the server sent reliable data (00 03)"),
             "{why}"
         );
         assert!(!why.contains("no answer to"), "{why}");
@@ -556,7 +663,7 @@ mod tests {
         // All three counted; the first two kept.
         assert_eq!(talked_to.unrecognised_count(), 3);
         let kept: Vec<&[u8]> = talked_to.unrecognised().collect();
-        assert_eq!(kept, [&[0, 5, 1, 2, 3, 4][..], &[0, 5, 1, 2, 3, 4][..]]);
+        assert_eq!(kept, [&[0, 3, 1, 2, 3, 4][..], &[0, 3, 1, 2, 3, 4][..]]);
     }
 
     /// `00 02` with a key we can't place is an answer, not silence -- the case
