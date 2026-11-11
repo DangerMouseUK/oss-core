@@ -338,11 +338,11 @@ pub struct VieClientHandshake {
     started: Option<u64>,
     last_sent: Option<u64>,
     timeout_ms: u64,
-    /// First [`REMEMBERED`] datagrams that were not a usable `00 02`, truncated.
+    /// First `REMEMBERED` datagrams that were not a usable `00 02`, truncated.
     seen: [[u8; REMEMBERED_PREFIX]; REMEMBERED],
     /// How many bytes of each `seen` entry are real.
     seen_len: [u8; REMEMBERED],
-    /// How many arrived in all (may exceed [`REMEMBERED`]).
+    /// How many arrived in all (may exceed `REMEMBERED`).
     seen_count: u32,
 }
 
@@ -389,8 +389,8 @@ impl VieClientHandshake {
     }
 
     /// Datagrams that arrived during setup without answering the connection
-    /// request: the first [`REMEMBERED`], each truncated to its leading
-    /// [`REMEMBERED_PREFIX`] bytes. Empty when the server really did say nothing.
+    /// request: the first two, each truncated to its leading 8 bytes. Empty when
+    /// the server really did say nothing.
     pub fn unrecognised(&self) -> impl Iterator<Item = &[u8]> {
         let n = (self.seen_count as usize).min(REMEMBERED);
         (0..n).map(move |i| &self.seen[i][..self.seen_len[i] as usize])
