@@ -4,33 +4,30 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 
 | Read | Client code | Server only | Not yet | Not settings |
 |---|---|---|---|---|
-| 175 | 25 | 8 | 21 | 9 |
+| 178 | 25 | 8 | 18 | 9 |
 
 ## Not used yet
 
 | Setting | Why it matters |
 |---|---|
-| `Chat:MessageReliable` | chat is always sent reliably |
-| `Flag:FlagDropResetReward` | a kill reward that resets the flag drop timer |
+| `Chat:MessageReliable` | whether chat is sent reliably. Known, not unknown: this client always sends it reliably. Wiring it is an oss-client change, picking the reliable or unreliable send for C2S 0x06 from this flag |
+| `Flag:FlagDropResetReward` | least kill reward that resets a carrier's `Flag:FlagDropDelay` timer. The kill packet (S2C 0x06) carries no reward, so whether Continuum scores the kill itself or waits for the score update (S2C 0x09) is unrecorded, and so is which side holds the timer. Settled by watching a Continuum carrier's drop timer across kills whose reward sits just above and just below the setting |
 | `Latency:ClientSlowPacketSampleSize` | client lag reports (C2S 0x00) aren't sent yet |
 | `Latency:ClientSlowPacketTime` | client lag reports (C2S 0x00) aren't sent yet |
-| `Latency:S2CNoDataKickoutDelay` | the transport's own timeout is used |
+| `Latency:S2CNoDataKickoutDelay` | ticks without server data before the client gives up. oss-net's own timeout is used instead; wiring it means handing oss-net this arena value |
 | `Latency:SendRoutePercent` | client lag reports aren't sent yet |
 | `Message:AllowAudioMessages` | voice messages aren't supported |
-| `Misc:AllowSavedShips` | saved-ship option |
-| `Misc:DisableBallKilling` | ball-killing rule |
+| `Misc:AllowSavedShips` | whether a ship and its prizes survive an arena change or a lagout. The saved ship lives on the server, so this is most likely an oss-server rule rather than sim work |
+| `Misc:DisableBallKilling` | whether a ball carrier can be killed. A simulation rule, but oss-sim carries no ball yet: the soccer settings it reads only cover throwing and ball speed |
 | `Misc:ExtraPositionData` | whether other (non-staff) players receive your extra position data (energy, items, timers); mostly the receive side |
-| `Misc:FrequencyShift` | meaning not confirmed |
-| `Misc:MaxTimerDrift` | timer drift check (anti-cheat) |
-| `Misc:NearDeathLevel` | energy at which a ship has a near death and loses 1 bounty (duelling zones); a sim rule, not a warning |
-| `Misc:SafetyLimit` | ticks a ship may spend in a safe zone |
-| `Misc:SlowFrameCheck` | frame-rate check (anti-cheat) |
-| `Misc:TickerDelay` | ticker text scrolling |
-| `Misc:VictoryMusic` | victory music |
-| `Radar:RadarMode` | radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the radar layout itself, which half or quarter you see and whether teammates show through it, is not done |
-| `Radar:RadarNeutralSize` | neutral zone on the radar |
-| `Ship:DamageFactor` | how likely a hit makes the ship lose a prize: 0 = never, 1 = very likely, 5000 = almost never (higher is safer; not a damage multiplier) |
-| `Ship:PrizeShareLimit` | highest bounty at which the ship still receives team prizes |
+| `Misc:FrequencyShift` | random pitch shift applied to sound effects (0-10000). The unit, and whether the shift is drawn per sound or per player, has never been recorded. Audio only, no simulation effect. Settled by recording Continuum's weapon sounds at 0 and at 10000 |
+| `Misc:MaxTimerDrift` | how far a client's clock may drift from the server's. An oss-server anti-cheat tolerance (see oss-sim's `validate`), not a rule the simulation runs |
+| `Misc:SafetyLimit` | ticks a ship may spend in a safe zone. The limit is recorded; what Continuum does when it runs out (kill, warp out, warn only) is not. Settled by sitting in a safe zone past a short SafetyLimit in Continuum and recording what happens to the ship |
+| `Misc:SlowFrameCheck` | whether the client reports slow frames (a cheat check Continuum's own docs call flawed). A client and server rule with no effect on the simulation |
+| `Misc:TickerDelay` | ticks between ticker help messages. The delay is clear; the list of messages Continuum cycles through is not recorded anywhere. Settled by watching a Continuum client's ticker for a full cycle and writing the messages down |
+| `Misc:VictoryMusic` | whether the zone plays victory music; audio only, and oss-client has no sound |
+| `Radar:RadarMode` | radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the blinding itself, which half or quarter you see and whether teammates show through it, has never been recorded. Settled by radar screenshots from a Continuum client in each of the five modes, on both sides of the map |
+| `Radar:RadarNeutralSize` | pixels of neutral space between the blinded radar zones of `Radar:RadarMode` 1-4. The blinding itself has never been recorded, so there is no gap for this to size. Settled by the same Continuum observation as `Radar:RadarMode`: radar screenshots of each mode at two very different neutral sizes |
 
 ## Server only
 
@@ -91,6 +88,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Misc:DecoyAliveTime` | `decoy_alive_time` |
 | `Misc:DisableBallThroughWalls` | `disable_ball_through_walls` |
 | `Misc:DisableScreenshot` | `disable_screenshot()` in `crates/oss-client/src/game/sandbox.rs` |
+| `Misc:NearDeathLevel` | `near_death_level` |
 | `Misc:SendPositionDelay` | `send_position_delay()` in `crates/oss-session/src/lib.rs` |
 | `Misc:WarpPointDelay` | `warp_point_delay` |
 | `Misc:WarpRadiusLimit` | `warp_radius_limit` |
@@ -158,6 +156,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Ship:BurstSpeed` | `burst_speed` |
 | `Ship:CloakEnergy` | `cloak_energy` |
 | `Ship:CloakStatus` | `cloak_status` |
+| `Ship:DamageFactor` | `damage_factor` |
 | `Ship:DecoyMax` | `decoy_max` |
 | `Ship:DisableFastShooting` | `disable_fast_shooting` |
 | `Ship:DoubleBarrel` | `double_barrel` |
@@ -194,6 +193,7 @@ Generated from `crates/oss-sim/src/coverage.rs` by its tests (`OSS_UPDATE_SETTIN
 | `Ship:MultiFireDelay` | `multi_fire_delay` |
 | `Ship:MultiFireEnergy` | `multi_fire_energy` |
 | `Ship:PortalMax` | `portal_max` |
+| `Ship:PrizeShareLimit` | `prize_share_limit` |
 | `Ship:Radius` | `radius` |
 | `Ship:RepelMax` | `repel_max` |
 | `Ship:RocketMax` | `rocket_max` |
