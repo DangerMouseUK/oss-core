@@ -217,7 +217,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     (
         "Misc:SafetyLimit",
         Use::NotYet(
-            "ticks a ship may spend in a safe zone. The limit is recorded; what Continuum does when it runs out (kill, warp out, warn only) is not. Settled by sitting in a safe zone past a short SafetyLimit in Continuum and recording what happens to the ship",
+            "ticks (1/100 s) a ship may spend in a safe zone, so 90000 is 15 minutes. Observed in Continuum: it draws `Safety Time Left: H:MM:SS` in yellow beside the ship, and at zero the ship is not killed, not warped out and gets no message -- the player leaves the arena and lands back at the client's main menu. Not sim work: the timer and the exit belong to the client and the session. What is still open is whether the client drops itself or the server kicks it, which looks the same on screen and needs a packet capture across the expiry",
         ),
     ),
     (
@@ -233,7 +233,7 @@ pub const COVERAGE: &[(&str, Use)] = &[
     (
         "Misc:TickerDelay",
         Use::NotYet(
-            "ticks between ticker help messages. The delay is clear; the list of messages Continuum cycles through is not recorded anywhere. Settled by watching a Continuum client's ticker for a full cycle and writing the messages down",
+            "delay between ticker help messages. The messages are `Ticker.hlp`, which ships beside the client: plain CRLF text, one message per line, 76 non-blank of 97, confirmed live against two lines verbatim. The **unit** is still unknown -- three values were tried and the measurement was confounded, because the sampled row is the bottom chat row that ordinary chat also writes to, so no claim is made. Settled by watching the ticker row alone in an arena with no other chat traffic",
         ),
     ),
     (
@@ -300,13 +300,13 @@ pub const COVERAGE: &[(&str, Use)] = &[
     (
         "Radar:RadarMode",
         Use::NotYet(
-            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs); the blinding itself, which half or quarter you see and whether teammates show through it, has never been recorded. Settled by radar screenshots from a Continuum client in each of the five modes, on both sides of the map",
+            "radar layout: 0 normal, 1 half/half, 2 quarters, 3 half/half seeing teammates, 4 quarters seeing teammates, as subgame's own `template.sss` describes them. The client reads it for team spawn areas (`spawn_area()` in sandbox.rs), and Continuum was observed to spawn by mode with all `Spawn:Team*` at 0. What is unrecorded is the blinding itself: which half or quarter you see and whether teammates show through it. Settled by radar screenshots in each of the five modes with a second player in the arena (see `Radar:RadarNeutralSize`)",
         ),
     ),
     (
         "Radar:RadarNeutralSize",
         Use::NotYet(
-            "pixels of neutral space between the blinded radar zones of `Radar:RadarMode` 1-4. The blinding itself has never been recorded, so there is no gap for this to size. Settled by the same Continuum observation as `Radar:RadarMode`: radar screenshots of each mode at two very different neutral sizes",
+            "pixels of neutral space between the blinded radar zones of `Radar:RadarMode` 1-4, as subgame's own settings catalogue (`template.sss`) describes it. What is unrecorded is what the blinding *looks like*: the modes govern which other ships appear on radar, so a one-player arena has nothing to blind and screenshots from one would be misleading. Settled by radar screenshots of each mode at two very different neutral sizes with a second player in the arena -- which needs a second machine, since Continuum 0.40 is single-instance",
         ),
     ),
     ("Repel:RepelDistance", Use::Read("repel_distance")),
