@@ -12,6 +12,19 @@ The connection request (`00 01`) carries a protocol word that selects the encryp
 - The server answers `00 02` with the negated key and keys its cipher with that value.
 - The client accepts only the negation of its key (enable VIE) or its own key echoed back (no encryption). A key of 0 also means no encryption.
 
+**Some servers gate the response behind a challenge.** Subgame 1.34.14 does not answer `00 01` directly. It replies with a six-byte `00 05`, and sends nothing at all until the client echoes the id back:
+
+| Step | Packet | Length |
+|---|---|---|
+| C→S | `00 01 u32 key, u16 protocol` | 8 |
+| S→C | `00 05 u32 id` | 6 |
+| C→S | `00 06 u32 id` (plus the usual `u32` time, ignored here) | 6 or 10 |
+| S→C | `00 02 u32 key` (subgame appends a `00`) | 6 or 7 |
+
+Measured against subgame 1.34.14 by black-box probing: the server reads only that first `u32` of the `00 06` and ignores anything after it, so the timestamp an ordinary sync response carries is optional in this role. **Why the server requires the exchange is not known.** ASSS does not use it.
+
+The six-byte `00 05` is the short form of the [sync request](packets/core-05-sync-request.md), so a client whose core-packet router is already running during setup answers it without noticing there was a challenge — which is the likely reason this went undocumented. A client that only watches for `00 02` while connecting sees silence instead, and reads it as a server that is down.
+
 **Table**
 
 - The session key seeds a generator that fills 260 16-bit values (520 bytes). The table is read as 130 little-endian 32-bit words.
@@ -26,10 +39,11 @@ The connection request (`00 01`) carries a protocol word that selects the encryp
 - Decryption runs the same chain, using the received ciphertext words.
 - The length never changes.
 
-**Key edge cases** (both confirmed against the reference server):
+**Key edge cases** (the first two confirmed against the reference server):
 
 - **Client key 1.** The server answers −1 (`0xFFFFFFFF`) and encrypts with it. The reference server's own *client* code uses −1 as a "bad key" sentinel and would run unencrypted, which breaks the session. This project follows the server: −1 is a normal key.
 - **Client key `0x80000000`.** Its negation is itself, so the response looks like "no encryption" to a client, yet the reference server keys VIE with it. A client must never offer this key. `oss-net` never generates it (`client_key_from_seed` maps it to `0x80000001`), and `VieAcceptor` encrypts just as the reference server does.
+- **Client keys below 1024 (subgame only).** Subgame 1.34.14 ignores a connection request whose client key is below 1024 and answers nothing — bisected, with 1023 silent and 1024 answered. A key of 0, which is how a client asks for no encryption, therefore cannot work against it, although it is correct for ASSS. Measured against that one server; the reason for the floor is not known.
 
 The test vectors in `crates/oss-net/tests/vectors/vie.txt` come from running the reference VIE module unmodified. They cover key exchange, tables and per-packet encryption for 16 keys, including the two above.
 
