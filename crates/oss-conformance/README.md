@@ -3,7 +3,7 @@
 A conformance suite for SubSpace/Continuum protocol implementations, part of [Open SubSpace](https://github.com/DangerMouseUK/oss-core). Use it to check a client, bot, server or library in any language.
 
 ```sh
-oss-conformance vectors -- python3 my_adapter.py   # 3,715 offline checks via a stdin/stdout adapter
+oss-conformance vectors -- python3 my_adapter.py   # 3,761 offline checks via a stdin/stdout adapter
 oss-conformance server zone.example:5000            # the suite acts as a client
 oss-conformance client --bind 0.0.0.0:5000          # the suite acts as a zone
 ```
