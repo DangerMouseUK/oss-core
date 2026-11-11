@@ -372,6 +372,19 @@ pub struct ArenaSettings {
 }
 
 /// Stock ship block: every ship in a freshly installed zone uses these values.
+///
+/// These constants, [`STOCK_FLAGGER`], [`STOCK_SOCCER`] and [`STOCK_PRIZE_WEIGHTS`]
+/// are the ASSS public arena's settings as that server **broadcasts** them, not as
+/// its configuration files spell them out. The two differ: ASSS leaves some keys out
+/// of `conf/svs` and fills them from its own defaults, so the packet is the only
+/// place the complete set appears. The reference is the captured settings packet in
+/// `crates/oss-proto/tests/vectors/clientset-asss-public.txt`, which is also what the
+/// `oss-proto` field tests check against. They exist to make an offline zone behave
+/// like a stock one, not as a design choice of this project's.
+///
+/// Three values do not follow it, and are called out where they are set:
+/// `turret_thrust_penalty`, `turret_speed_penalty` and
+/// [`ArenaSettings::death_prize_time`].
 pub const STOCK_SHIP: ShipSettings = ShipSettings {
     radius: 0,
     initial_rotation: 200,
@@ -449,6 +462,9 @@ pub const STOCK_SHIP: ShipSettings = ShipSettings {
     soccer_ball_friction: 12,
     soccer_ball_proximity: 64,
     soccer_ball_speed: 2500,
+    // The ASSS public arena broadcasts 1 and 125 here. These two are 0 so that a
+    // sandbox ship with a turret riding on it handles like one without; where that
+    // came from is not recorded, and nothing has checked whether it was intended.
     turret_thrust_penalty: 0,
     turret_speed_penalty: 0,
     see_mines: false,
@@ -541,6 +557,7 @@ impl Default for ArenaSettings {
             prize_max_exist: 8000,
             prize_min_exist: 4000,
             prize_negative_factor: 300,
+            // The ASSS public arena broadcasts 800; why this is 1000 is not recorded.
             death_prize_time: 1000,
             multi_prize_count: 10,
             warp_radius_limit: 20,
