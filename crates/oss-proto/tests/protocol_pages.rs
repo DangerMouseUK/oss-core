@@ -1083,8 +1083,18 @@ fn pages() -> Vec<Page> {
             "sync request",
             "CorePacket::SyncRequest",
             "6 or 14",
-            "0|1|u8|core|`0x00`\n1|1|u8|subtype|`0x05`\n2|4|u32|time|Sender's clock (ticks)\n6|4|u32|sent|14-byte form: datagrams sent\n10|4|u32|received|14-byte form: datagrams received",
-            "Clients send the 14-byte form; servers use the counts for loss statistics.",
+            "0|1|u8|core|`0x00`\n1|1|u8|subtype|`0x05`\n2|4|u32|time|Sender's clock (ticks); before `00 02`, an id to echo back\n6|4|u32|sent|14-byte form: datagrams sent\n10|4|u32|received|14-byte form: datagrams received",
+            "The 6-byte form has two roles. In an established session it is an ordinary \
+             sync, answered with `00 06` carrying the echoed value and the responder's \
+             own clock; clients send the 14-byte form and servers use the counts for \
+             loss statistics.\n\nBefore the connection is established it can also be a \
+             challenge that gates the connect response: subgame 1.34.14 answers `00 01` \
+             with a 6-byte `00 05` and sends nothing further until the client replies \
+             `00 06` with that `u32` echoed back, after which `00 02` arrives. Measured \
+             against that server: only the first `u32` of the reply is read, so the \
+             trailing clock is optional in this role. Why it requires the exchange is \
+             not known, and ASSS does not. See \
+             [encryption.md](../encryption.md).",
             Sources,
             CORE_SOURCES,
         ),
