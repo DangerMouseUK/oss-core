@@ -199,6 +199,14 @@ pub struct Green {
 /// Most greens on the map at once.
 const MAX_GREENS: usize = 256;
 
+/// The prizes a `Ship:DamageFactor` hit can take away: every prize except the ones
+/// that aren't a loss to begin with (warp, full charge, engine shutdown, super,
+/// shields and multiprize). Bricks are not skipped here, unlike in the random prize
+/// batches of [`Prize::excluded_from_batches`]. From nullspace (MIT).
+const DAMAGE_PRIZES: [i32; 22] = [
+    1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 15, 16, 19, 20, 21, 22, 23, 24, 26, 27, 28,
+];
+
 impl World {
     /// Applies prize `id` (negative = bad version, 0 = a random good prize) to ship
     /// `index`. Picking up a positive prize raises bounty by one.
@@ -338,6 +346,68 @@ impl World {
     /// client spawns greens on the same ticks.
     pub fn reset_green_timer(&mut self) {
         self.green_ticks = 0;
+    }
+
+    /// Team prize sharing (`Ship:PrizeShareLimit`): a teammate on `freq` picked up
+    /// prize `prize`, so every ship this world simulates locally (the player's own
+    /// ship) that is on the same frequency and still below its ship's share limit
+    /// receives the same prize. Warp prizes are never shared. The shared prize seed is
+    /// not advanced, so greens stay in step with the rest of the arena.
+    ///
+    /// The client calls this when the server reports a prize pickup (S2C `0x08`),
+    /// alongside [`World::remove_green_at`]. Behaviour from the nullspace client
+    /// (MIT): `OnPlayerPrizePkt` in `Game.cpp`.
+    pub fn share_prize(&mut self, freq: u16, taker: u16, prize: i32, events: &mut Vec<Event>) {
+        if prize == Prize::Warp as i32 || prize == -(Prize::Warp as i32) {
+            return;
+        }
+        for index in 0..self.ships.len() {
+            let ship = &self.ships[index];
+            if ship.remote || !ship.takes_damage || !ship.is_alive() {
+                continue;
+            }
+            if ship.id == taker || ship.freq != freq {
+                continue;
+            }
+            if ship.bounty >= self.settings.ships[ship.kind as usize].prize_share_limit {
+                continue;
+            }
+            self.apply_prize(index, prize, events);
+        }
+    }
+
+    /// `Ship:DamageFactor`: a hit the ship survives can cost it a prize. The chance is
+    /// one in `factor * 200000 / (damage * 1000) + 1`, so a factor of 1 almost always
+    /// costs a prize and 5000 almost never does; 0 never does. It only applies while
+    /// the ship has bounty to lose and is already below its maximum energy (so the
+    /// first hit on a full ship is free).
+    ///
+    /// Behaviour from the nullspace client (MIT): `ShipController::ApplyDamage`. That
+    /// draws the prize as `rand() % Prize::Count`, which can also land on id 0 — no
+    /// prize at all, but still a bounty increase. That reads as an off-by-one, so this
+    /// draws one of the 22 real losses every time instead; the chance formula and the
+    /// set of prizes skipped are taken as they stand.
+    pub(crate) fn lose_prize_to_damage(
+        &mut self,
+        index: usize,
+        damage: u32,
+        events: &mut Vec<Event>,
+    ) {
+        let ship = &self.ships[index];
+        let factor = self.settings.ships[ship.kind as usize].damage_factor as u64;
+        if factor == 0
+            || damage == 0
+            || ship.bounty == 0
+            || ship.energy_points() >= ship.stats.max_energy as i32
+        {
+            return;
+        }
+        let chance = (factor * 200_000) / (damage as u64 * 1000) + 1;
+        if !(self.rng.next_u32() as u64).is_multiple_of(chance) {
+            return;
+        }
+        let id = DAMAGE_PRIZES[self.rng.below(DAMAGE_PRIZES.len() as u32) as usize];
+        self.apply_prize(index, -id, events);
     }
 
     /// Removes the green on tile (x, y), if any (another player took it).

@@ -980,7 +980,19 @@ impl World {
         }
         let dmg = damage as i32 * ENERGY_SCALE;
         if ship.energy > dmg {
+            let before = ship.energy;
+            // `Ship:DamageFactor`: surviving a hit can shake a prize loose.
+            self.lose_prize_to_damage(index, damage, events);
+            // `Misc:NearDeathLevel`: a hit that brings the ship from above the level
+            // down to it or below costs one bounty. The level is only ever crossed by
+            // taking damage, and a per-tick check would empty a duelling ship's bounty
+            // while it recharged, so this is the crossing, not the state.
+            let near_death = self.settings.near_death_level as i32 * ENERGY_SCALE;
+            let ship = &mut self.ships[index];
             ship.energy -= dmg;
+            if near_death > 0 && before > near_death && ship.energy <= near_death {
+                ship.bounty = ship.bounty.saturating_sub(1);
+            }
             return;
         }
         if target == shooter {
