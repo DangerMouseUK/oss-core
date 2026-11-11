@@ -17,5 +17,11 @@ Shared Rust crates for Open SubSpace (a SubSpace/Continuum-compatible client and
 - Wire layout is little-endian and byte-exact; document each packet in `docs/protocol/` in your own words when you implement it.
 - Prefer synthetic test data. Small default maps (e.g. `tests/fixtures/smallmap.lvl`, from the GPL ASSS sample zone) may be committed as fixtures. Never commit `Continuum.exe` or its DLLs, third-party zone downloads, captures, personal data or machine-specific paths.
 - Keep dependencies few and permissive (`cargo deny check` must pass).
-- Before committing: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- Before committing, all four: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features`.
+  **The doc gate is not optional and the other three cannot stand in for it.** CI runs it as the `docs`
+  job, and it is the only one that catches a rustdoc fault — a public item linking to a private one, a
+  broken intra-doc link, a bad code fence. On 2026-11-11 `main` went red on exactly that (a doc comment
+  linking to a private constant) after fmt, clippy and tests all passed locally and the consuming repo
+  compiled clean against the change.
 - Commits: imperative subject, small and focused.
