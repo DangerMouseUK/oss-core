@@ -19,11 +19,13 @@
 //! # `CLV1` screen objects
 //!
 //! An object section is tagged `CLV1` or `CLV2`, and the two do not share a screen
-//! layout. [`ObjectData`]'s `CLV2` split is reference index in bits 0-3 and signed
-//! 12-bit offset in bits 4-15; **`CLV1` is the mirror of it** — reference in bits
-//! 12-15, offset in bits 0-11 — with only three reference points instead of twelve
-//! ([`Clv1Reference`]). Both were measured from a real Continuum client, the second
-//! at two view sizes.
+//! layout. [`ObjectData`]'s `CLV2` split is a reference index in bits 0-3 and a
+//! signed 12-bit offset in bits 4-15, the index choosing one of twelve HUD anchors.
+//! **`CLV1` does not split the word.** Its low twelve bits are a signed offset, and
+//! the whole word read as an `i16` picks one of three reference points — the view's
+//! top-left, the bottom-right of a 960×960 box centred in the view, or the view's
+//! bottom-right ([`Clv1Reference`]). Both were measured from a real Continuum
+//! client, the second at two view sizes and on both axes.
 //!
 //! Reading a `CLV1` word with the `CLV2` split is how Trench Wars' `entermsg.lvz`
 //! banner came to be drawn 613 px too far right: `x_word = 0x4CF4` is "reference 4,
@@ -48,7 +50,7 @@ use alloc::vec::Vec;
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
-pub use oss_proto::{CLV1_BOX, Clv1Reference, ObjectData, ObjectLayout};
+pub use oss_proto::{CLV1_BOX, CLV1_CENTRED_MIN, Clv1Reference, ObjectData, ObjectLayout};
 
 use crate::FormatError;
 use crate::error::u32_at;
@@ -520,53 +522,71 @@ mod tests {
         assert_eq!(o.screen_x(), 1231, "the CLV2 reading, which is the bug");
     }
 
-    /// The reference table, from a real Continuum client at two view sizes.
+    /// The rule, against the words a real Continuum client was measured with.
+    /// One rule, no special cases: the whole word read as `i16` picks the
+    /// reference, its low twelve bits are the offset.
     #[test]
-    fn clv1_reference_table() {
-        let at = |nibble: u8, offset: i16, w: i32, h: i32| {
-            let word = (u16::from(nibble) << 12) | (offset as u16 & 0xFFF);
-            let o = ObjectData {
+    fn clv1_rule_matches_the_measured_words() {
+        let x_at = |word: u16, w: i32| {
+            ObjectData {
                 x_word: word,
+                ..ObjectData::default()
+            }
+            .clv1_screen_position(w, 0)
+            .0
+        };
+        let y_at = |word: u16, h: i32| {
+            ObjectData {
                 y_word: word,
                 ..ObjectData::default()
-            };
-            o.clv1_screen_position(w, h)
+            }
+            .clv1_screen_position(0, h)
+            .1
         };
 
-        // Offset 0 reads the reference point itself. Group 0 is the view's
-        // top-left, group 2 its bottom-right, and group 1 the bottom-right corner
-        // of a 960x960 box centred in the view.
-        for n in 0..=3 {
-            assert_eq!(at(n, 0, 1888, 1016), (0, 0), "nibble {n}");
-            assert_eq!(at(n, 0, 1920, 1080), (0, 0), "nibble {n}");
+        // Probe A, at 1920x1080. Group 1 objects sit happily at low x -- there is
+        // no cull down there, which is what the old nibble reading got wrong.
+        assert_eq!(x_at(0x4A97, 1920), 55);
+        assert_eq!(x_at(0x4A88, 1920), 40);
+        assert_eq!(x_at(0x4A70, 1920), 16);
+        assert_eq!(x_at(0x6A88, 1920), 40);
+        assert_eq!(x_at(0xBA97, 1920), 535);
+        assert_eq!(x_at(0x3AA1, 1920), 65);
+
+        // Probe C, the threshold, bracketed at both view sizes. 15000 reads from
+        // the view's top-left, 15001 from the centred box: one apart in the word,
+        // far apart on screen.
+        assert_eq!(Clv1Reference::from_word(15000), Clv1Reference::TopLeft);
+        assert_eq!(Clv1Reference::from_word(15001), Clv1Reference::CentredBox);
+        assert_eq!(CLV1_CENTRED_MIN, 15001);
+        for (word, at_1920, at_1888) in [(15001u16, 57, 41), (15004, 60, 44), (15008, 64, 48)] {
+            assert_eq!(x_at(word, 1920), at_1920, "word {word}");
+            assert_eq!(x_at(word, 1888), at_1888, "word {word}");
         }
-        for n in 4..=7 {
-            assert_eq!(at(n, 0, 1888, 1016), (1424, 988), "nibble {n}");
-            assert_eq!(at(n, 0, 1920, 1080), (1440, 1020), "nibble {n}");
-        }
-        for n in 8..=15 {
-            assert_eq!(at(n, 0, 1888, 1016), (1888, 1016), "nibble {n}");
-            assert_eq!(at(n, 0, 1920, 1080), (1920, 1080), "nibble {n}");
-        }
+        // 15000 (0x3A98) is top-left minus 1384, i.e. off the left edge -- which is
+        // why it looked like a cull rather than a different reference.
+        assert_eq!(x_at(0x3A98, 1920), -1384);
+        assert_eq!(x_at(0x3A97, 1888), -1385);
 
-        // Probes that were not used to fit the centred-box rule: at 1920x1080,
-        // x at offset -700 lands on 740 and y at offset -500 on 520.
-        assert_eq!(at(4, -700, 1920, 1080).0, 740);
-        assert_eq!(at(4, -500, 1920, 1080).1, 520);
+        // Probe D: y uses the same threshold on its own word.
+        assert_eq!(y_at(0x3A99, 1016), -395);
+        assert_eq!(y_at(0x3A98, 1016), -1384);
+        assert_eq!(y_at(0x0F9C, 1016), -100);
 
-        // The last nibble of each of the two upper groups does not carry into the
-        // group when the offset is negative: 1424 - 1 and 1888 - 1.
-        assert_eq!(at(7, -1, 1888, 1016).0, 1423);
-        assert_eq!(at(11, -1, 1888, 1016).0, 1887);
+        // Negative as i16 is the view's bottom-right; 0xBFFF is the one-pixel
+        // sliver measured at the right edge.
+        assert_eq!(x_at(0xBFFF, 1888), 1887);
+        assert_eq!(x_at(0x8000, 1888), 1888);
+        assert_eq!(x_at(0xFFFF, 1888), 1887);
 
-        // Nibble 3 is read uniformly as group 0, which is where we knowingly
-        // differ from Continuum: it would put a negative offset on group 1
-        // (1424 - 100 = 1324) and draw nothing below about -1385.
-        assert_eq!(at(3, 100, 1888, 1016).0, 100);
-        assert_eq!(at(3, -100, 1888, 1016).0, -100);
-
-        // Offsets are signed 12-bit, so they wrap at the edges of that range.
-        assert_eq!(at(0, 2047, 1888, 1016).0, 2047);
-        assert_eq!(at(0, -2048, 1888, 1016).0, -2048);
+        // The two axes are decided independently.
+        let o = ObjectData {
+            x_word: 0x4A70,
+            y_word: 0x0064,
+            ..ObjectData::default()
+        };
+        assert_eq!(o.clv1_x_ref(), Clv1Reference::CentredBox);
+        assert_eq!(o.clv1_y_ref(), Clv1Reference::TopLeft);
+        assert_eq!(o.clv1_screen_position(1920, 1080), (16, 100));
     }
 }

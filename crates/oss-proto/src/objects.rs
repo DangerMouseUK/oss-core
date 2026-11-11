@@ -80,9 +80,10 @@ pub mod reference {
 /// | 2-3 | | map: x in pixels (`i16`); screen: reference (4 bits) + x offset (signed 12 bits) |
 /// | 4-5 | | same for y |
 ///
-/// The screen split above is the **`CLV2`** one, reference in bits 0-3. A `CLV1`
-/// section mirrors it -- reference in bits 12-15, offset in bits 0-11 -- and has its
-/// own accessors ([`clv1_x_ref`](Self::clv1_x_ref) and friends). See [`ObjectLayout`].
+/// The screen split above is the **`CLV2`** one. A `CLV1` section does not split the
+/// word at all: its low twelve bits are a signed offset, and the whole word read as an
+/// `i16` picks one of three reference points. It has its own accessors
+/// ([`clv1_x_ref`](Self::clv1_x_ref) and friends); see [`ObjectLayout`].
 /// | 6 | | image index |
 /// | 7 | | [`layer`] |
 /// | 8-9 | 0-11 | display time (1/10 s, 0 = forever) |
@@ -113,8 +114,9 @@ pub enum ObjectLayout {
     /// `CLV2`: reference index in bits 0-3, signed 12-bit offset in bits 4-15,
     /// the reference being one of the twelve HUD points in [`reference`](mod@reference).
     Clv2,
-    /// `CLV1`: the mirror of `CLV2` — reference in bits 12-15, signed 12-bit offset
-    /// in bits 0-11 — and only three reference points ([`Clv1Reference`]).
+    /// `CLV1`: the low twelve bits are a signed offset and the whole word, read as an
+    /// `i16`, picks one of three reference points ([`Clv1Reference`]). The offset bits
+    /// are part of that comparison, so this is not a split into fields.
     Clv1,
 }
 
@@ -123,41 +125,58 @@ pub enum ObjectLayout {
 /// What this box *is* has not been established; the arithmetic is what was measured.
 pub const CLV1_BOX: i32 = 960;
 
+/// Lowest non-negative word value that reads from [`Clv1Reference::CentredBox`].
+///
+/// Measured, not derived: the edge was bracketed between word 15000 (top-left) and
+/// 15001 (centred box) at two view sizes, 1888x1016 and 1920x1080, on both axes. It
+/// is the same number at both, and has no established relation to either — where it
+/// comes from is unknown.
+pub const CLV1_CENTRED_MIN: i32 = 15001;
+
 /// The reference point a `CLV1` screen object hangs from. Unlike `CLV2`'s twelve HUD
 /// anchors there are only three, and they depend on the view size alone, so this crate
 /// can resolve them without knowing anything about the HUD.
 ///
-/// Measured from a real Continuum client at two view sizes (1888x1016 and 1920x1080).
+/// Which one applies is decided by the **whole word read as a signed 16-bit value**,
+/// not by any field within it — see [`Clv1Reference::from_word`]. Measured from a real
+/// Continuum client at two view sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Clv1Reference {
-    /// Reference nibble 0-3: the top-left of the view, `(0, 0)`.
+    /// Word 0..=15000: the top-left of the view, `(0, 0)`.
     TopLeft,
-    /// Reference nibble 4-7: the bottom-right corner of a [`CLV1_BOX`]-square box
+    /// Word 15001..=32767: the bottom-right corner of a [`CLV1_BOX`]-square box
     /// centred in the view, `((w + 960) / 2, (h + 960) / 2)`.
     CentredBox,
-    /// Reference nibble 8-15: the bottom-right of the view, `(w, h)`.
+    /// Word 32768..=65535 (negative as `i16`): the bottom-right of the view, `(w, h)`.
     BottomRight,
 }
 
 impl Clv1Reference {
-    /// The reference a nibble selects. Nibbles 0-3 are read uniformly as
-    /// [`TopLeft`](Self::TopLeft); see [`ObjectData::clv1_x_ref`] for the one place
-    /// that knowingly differs from Continuum.
-    pub const fn from_nibble(n: u8) -> Self {
-        match n & 0xF {
-            0..=3 => Self::TopLeft,
-            4..=7 => Self::CentredBox,
-            _ => Self::BottomRight,
+    /// The reference a position word selects: bottom-right when the word is negative
+    /// as an `i16`, the centred box at [`CLV1_CENTRED_MIN`] and above, top-left
+    /// otherwise.
+    ///
+    /// The word is not split into fields for this. Its low twelve bits are also the
+    /// offset ([`ObjectData::clv1_screen_x`]), so a large negative offset can carry
+    /// into the comparison and move the object to a different reference — that is
+    /// Continuum's behaviour, not an artefact. It is why words in `0x3000..=0x3FFF`
+    /// look inconsistent when they are grouped by their top nibble: the threshold
+    /// falls inside that nibble's range, so `0x3A97` (14999) is top-left while
+    /// `0x3AA1` (15009) is the centred box.
+    pub const fn from_word(word: u16) -> Self {
+        let w = word as i16;
+        if w < 0 {
+            Self::BottomRight
+        } else if w as i32 >= CLV1_CENTRED_MIN {
+            Self::CentredBox
+        } else {
+            Self::TopLeft
         }
     }
 
     /// Where this reference sits in a view `width` x `height` pixels.
     pub const fn point(self, width: i32, height: i32) -> (i32, i32) {
-        match self {
-            Self::TopLeft => (0, 0),
-            Self::CentredBox => ((width + CLV1_BOX) / 2, (height + CLV1_BOX) / 2),
-            Self::BottomRight => (width, height),
-        }
+        (self.axis(width), self.axis(height))
     }
 
     /// One axis of [`point`](Self::point), for a view `extent` pixels along it.
@@ -241,36 +260,19 @@ impl ObjectData {
     pub fn screen_y(&self) -> i16 {
         sign12(self.y_word >> 4)
     }
-    /// Screen object x reference point under the **`CLV1`** layout: the top nibble
-    /// of the word.
-    ///
-    /// # Nibble 3
-    ///
-    /// Continuum is self-inconsistent here and this reads it uniformly as
-    /// [`Clv1Reference::TopLeft`]. Observed behaviour, measured at one view size: with
-    /// a non-negative offset nibble 3 uses the top-left, with a negative offset down to
-    /// about -1375 it uses [`Clv1Reference::CentredBox`], and below about -1385 the
-    /// object is not drawn at all. The boundary is on the offset, not on where the
-    /// object lands, and neighbouring nibbles (7, 11) do not behave this way, so it is
-    /// not a carry out of the offset's sign bit. Nobody has explained it.
-    ///
-    /// It is not reproduced because the two thresholds were only ever bracketed
-    /// ("about -1375", "about -1385") at a single view size, so reproducing the cull
-    /// would mean inventing exact constants that were never measured, and presenting a
-    /// mystery as deliberate behaviour. No file in any zone we hold uses nibble 3 with a
-    /// negative offset. **A real file that does would be reason to revisit this.**
+    /// Screen object x reference point under the **`CLV1`** layout, from the whole
+    /// word ([`Clv1Reference::from_word`]).
     pub fn clv1_x_ref(&self) -> Clv1Reference {
-        Clv1Reference::from_nibble((self.x_word >> 12) as u8)
+        Clv1Reference::from_word(self.x_word)
     }
 
-    /// Screen object y reference point under the `CLV1` layout (see
-    /// [`clv1_x_ref`](Self::clv1_x_ref)).
+    /// Screen object y reference point under the `CLV1` layout.
     pub fn clv1_y_ref(&self) -> Clv1Reference {
-        Clv1Reference::from_nibble((self.y_word >> 12) as u8)
+        Clv1Reference::from_word(self.y_word)
     }
 
     /// Screen object x offset from [`clv1_x_ref`](Self::clv1_x_ref): the low twelve
-    /// bits of the word, signed.
+    /// bits of the word, sign-extended.
     pub fn clv1_screen_x(&self) -> i16 {
         sign12(self.x_word & 0xFFF)
     }
@@ -281,8 +283,14 @@ impl ObjectData {
     }
 
     /// Where a `CLV1` screen object is drawn in a view `width` x `height` pixels: its
-    /// reference point plus its offset, in view pixels. The result is not clamped --
-    /// Continuum simply does not draw an object that falls outside the view.
+    /// reference point plus its offset, in view pixels. Each axis is decided on its
+    /// own word.
+    ///
+    /// The result is deliberately not clamped. Continuum **clips** such an object at
+    /// the view edges rather than dropping it: an image placed left of the view is
+    /// drawn with its left part cut off, and only vanishes once nothing is left — a
+    /// 1600-pixel-wide image at x = -1385 shows its last 215 pixels, where a 16-pixel
+    /// one at the same position shows nothing.
     ///
     /// Only meaningful for a screen object from a `CLV1` section; a map object's
     /// position is [`map_x`](Self::map_x) / [`map_y`](Self::map_y) under either layout.
