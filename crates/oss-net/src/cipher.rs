@@ -319,8 +319,18 @@ impl Acceptor for NullAcceptor {
     }
 }
 
+/// Datagrams a [`VieClientHandshake`] remembers for its failure message.
+const REMEMBERED: usize = 2;
+/// Leading bytes kept from each remembered datagram.
+const REMEMBERED_PREFIX: usize = 8;
+
 /// Client-side VIE handshake: sends `00 01` (resending every
 /// [`VieClientHandshake::RESEND_MS`]) until the server answers `00 02`.
+///
+/// Anything else that arrives during setup is remembered rather than dropped
+/// silently, so that a handshake which times out can say whether it heard nothing
+/// at all or heard something it could not use. See
+/// [`unrecognised`](Self::unrecognised).
 #[derive(Debug, Clone)]
 pub struct VieClientHandshake {
     key: u32,
@@ -328,6 +338,12 @@ pub struct VieClientHandshake {
     started: Option<u64>,
     last_sent: Option<u64>,
     timeout_ms: u64,
+    /// First [`REMEMBERED`] datagrams that were not a usable `00 02`, truncated.
+    seen: [[u8; REMEMBERED_PREFIX]; REMEMBERED],
+    /// How many bytes of each `seen` entry are real.
+    seen_len: [u8; REMEMBERED],
+    /// How many arrived in all (may exceed [`REMEMBERED`]).
+    seen_count: u32,
 }
 
 impl VieClientHandshake {
@@ -353,6 +369,9 @@ impl VieClientHandshake {
             started: None,
             last_sent: None,
             timeout_ms: 10_000,
+            seen: [[0; REMEMBERED_PREFIX]; REMEMBERED],
+            seen_len: [0; REMEMBERED],
+            seen_count: 0,
         }
     }
 
@@ -368,6 +387,90 @@ impl VieClientHandshake {
         v.extend_from_slice(&self.protocol.to_le_bytes());
         v
     }
+
+    /// Datagrams that arrived during setup without answering the connection
+    /// request: the first [`REMEMBERED`], each truncated to its leading
+    /// [`REMEMBERED_PREFIX`] bytes. Empty when the server really did say nothing.
+    pub fn unrecognised(&self) -> impl Iterator<Item = &[u8]> {
+        let n = (self.seen_count as usize).min(REMEMBERED);
+        (0..n).map(move |i| &self.seen[i][..self.seen_len[i] as usize])
+    }
+
+    /// How many datagrams arrived during setup without answering the connection
+    /// request. Can exceed what [`unrecognised`](Self::unrecognised) returns.
+    pub fn unrecognised_count(&self) -> u32 {
+        self.seen_count
+    }
+
+    fn remember(&mut self, data: &[u8]) {
+        let slot = self.seen_count as usize;
+        if slot < REMEMBERED {
+            let n = data.len().min(REMEMBERED_PREFIX);
+            self.seen[slot][..n].copy_from_slice(&data[..n]);
+            self.seen_len[slot] = n as u8;
+        }
+        self.seen_count = self.seen_count.saturating_add(1);
+    }
+
+    /// Why the handshake ran out of time, said in terms of what actually arrived.
+    /// "Nothing came back" and "something came back that I could not use" send a
+    /// reader to completely different places, so they must not share a message.
+    fn timed_out(&self) -> &'static str {
+        let Some(first) = self.unrecognised().next() else {
+            return "no answer to the connection request";
+        };
+        match first {
+            [0, 2, ..] => {
+                "no usable answer to the connection request: the server's 00 02 \
+                 carried a key that is neither the client key echoed back (no \
+                 encryption) nor the VIE server key derived from it"
+            }
+            [0, 1, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 connection request (00 01) of its own, not a response"
+            }
+            [0, 3, ..] => {
+                "no usable answer to the connection request: the server sent \
+                 reliable data (00 03) without answering it"
+            }
+            [0, 4, ..] => {
+                "no usable answer to the connection request: the server sent an \
+                 acknowledgement (00 04) without answering it"
+            }
+            [0, 5, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 sync request (00 05) without answering it"
+            }
+            [0, 6, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 sync response (00 06) without answering it"
+            }
+            [0, 7, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 malformed disconnect (00 07 with trailing bytes)"
+            }
+            [0, 8 | 9, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 chunk (00 08 / 00 09) without answering it"
+            }
+            [0, 0x0A, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 sized transfer (00 0A) without answering it"
+            }
+            [0, 0x0E, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 cluster (00 0E) without answering it"
+            }
+            [0, ..] => {
+                "no usable answer to the connection request: the server sent a \
+                 core (00) packet of a type this handshake does not know"
+            }
+            _ => {
+                "no usable answer to the connection request: the server sent a \
+                 game packet, not a core (00) connection response"
+            }
+        }
+    }
 }
 
 impl Handshake for VieClientHandshake {
@@ -380,18 +483,25 @@ impl Handshake for VieClientHandshake {
                 } else if server_key == vie::server_key_for(self.key) {
                     Step::Established(vie_cipher(server_key))
                 } else {
+                    // An answer, just not one we can use: keep it for the
+                    // failure message instead of waiting out the clock in
+                    // silence.
+                    self.remember(data);
                     Step::Pending
                 }
             }
             [0, 7] => Step::Failed("server refused the connection"),
-            _ => Step::Pending,
+            _ => {
+                self.remember(data);
+                Step::Pending
+            }
         }
     }
 
     fn poll(&mut self, now: u64, out: &mut Vec<Vec<u8>>) -> Step {
         let started = *self.started.get_or_insert(now);
         if now.saturating_sub(started) >= self.timeout_ms {
-            return Step::Failed("no answer to connection request");
+            return Step::Failed(self.timed_out());
         }
         if self
             .last_sent
@@ -407,6 +517,93 @@ impl Handshake for VieClientHandshake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A handshake that hears nothing and one that hears the wrong thing must not
+    /// give the same reason: the first sends a reader to the network, the second
+    /// to the protocol. This is the bug this test exists for.
+    #[test]
+    fn silence_and_an_unusable_answer_read_differently() {
+        let mut out = Vec::new();
+
+        let mut quiet = VieClientHandshake::new(1).timeout(1000);
+        assert!(matches!(quiet.poll(0, &mut out), Step::Pending));
+        let Step::Failed(why) = quiet.poll(2000, &mut out) else {
+            panic!("should have timed out");
+        };
+        assert_eq!(why, "no answer to the connection request");
+        assert_eq!(quiet.unrecognised_count(), 0);
+        assert_eq!(quiet.unrecognised().count(), 0);
+
+        // The server answered every request -- with something unusable.
+        let mut talked_to = VieClientHandshake::new(1).timeout(1000);
+        assert!(matches!(talked_to.poll(0, &mut out), Step::Pending));
+        for _ in 0..3 {
+            assert!(matches!(
+                talked_to.on_datagram(10, &[0, 5, 1, 2, 3, 4], &mut out),
+                Step::Pending
+            ));
+        }
+        let Step::Failed(why) = talked_to.poll(2000, &mut out) else {
+            panic!("should have timed out");
+        };
+        assert!(
+            why.contains("the server sent a sync request (00 05)"),
+            "{why}"
+        );
+        assert!(!why.contains("no answer to"), "{why}");
+        // Wrapped literals must not leave run-together or doubled spacing.
+        assert!(!why.contains("  "), "{why}");
+        // All three counted; the first two kept.
+        assert_eq!(talked_to.unrecognised_count(), 3);
+        let kept: Vec<&[u8]> = talked_to.unrecognised().collect();
+        assert_eq!(kept, [&[0, 5, 1, 2, 3, 4][..], &[0, 5, 1, 2, 3, 4][..]]);
+    }
+
+    /// `00 02` with a key we can't place is an answer, not silence -- the case
+    /// that is easiest to mistake for a dead server.
+    #[test]
+    fn a_connect_response_with_an_unknown_key_is_reported_as_an_answer() {
+        let mut out = Vec::new();
+        let mut c = VieClientHandshake::new(7).timeout(1000);
+        assert!(matches!(c.poll(0, &mut out), Step::Pending));
+        let mut reply = vec![0u8, 2];
+        reply.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        assert!(matches!(c.on_datagram(10, &reply, &mut out), Step::Pending));
+        let Step::Failed(why) = c.poll(2000, &mut out) else {
+            panic!("should have timed out");
+        };
+        assert!(why.contains("00 02"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+        assert_eq!(c.unrecognised_count(), 1);
+        assert_eq!(c.unrecognised().next().unwrap(), &reply[..]);
+
+        // A datagram that isn't a core packet at all is named as such.
+        let mut c = VieClientHandshake::new(7).timeout(1000);
+        assert!(matches!(c.poll(0, &mut out), Step::Pending));
+        assert!(matches!(
+            c.on_datagram(10, &[0x0B, 0x01], &mut out),
+            Step::Pending
+        ));
+        let Step::Failed(why) = c.poll(2000, &mut out) else {
+            panic!("should have timed out");
+        };
+        assert!(why.contains("game packet"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+
+        // A usable answer still establishes, and is never "unrecognised".
+        let mut c = VieClientHandshake::new(7);
+        let key = match c.poll(0, &mut out) {
+            Step::Pending => u32::from_le_bytes([out[0][2], out[0][3], out[0][4], out[0][5]]),
+            _ => panic!("expected a request"),
+        };
+        let mut reply = vec![0u8, 2];
+        reply.extend_from_slice(&vie::server_key_for(key).to_le_bytes());
+        assert!(matches!(
+            c.on_datagram(10, &reply, &mut out),
+            Step::Established(_)
+        ));
+        assert_eq!(c.unrecognised_count(), 0);
+    }
 
     #[test]
     fn vie_handshake_both_sides() {
