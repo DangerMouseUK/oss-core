@@ -959,3 +959,127 @@ fn turrets_slow_their_host() {
         s.initial_speed.saturating_sub(1000) as i64
     );
 }
+
+#[test]
+fn damage_factor_shakes_a_prize_loose() {
+    let mut s = bare();
+    // 1 = a prize almost every hit.
+    for ship in &mut s.ships {
+        ship.damage_factor = 1;
+    }
+    let mut w = world_with(None, s);
+    w.add_ship(0, 0, 0);
+    w.ships[0].bounty = 10;
+    // A ship at full energy never loses a prize, however hard it is hit.
+    let mut ev = Vec::new();
+    w.damage(0, 1, 100, 0, &mut ev);
+    assert!(!ev.iter().any(|e| matches!(e, Event::PrizeTaken { .. })));
+    // Now it is below maximum energy, so hits can cost it prizes.
+    let mut lost = 0;
+    for _ in 0..20 {
+        let mut ev = Vec::new();
+        w.ships[0].energy = 500 * ENERGY_SCALE;
+        w.damage(0, 1, 50, 0, &mut ev);
+        lost += ev
+            .iter()
+            .filter(|e| matches!(e, Event::PrizeTaken { prize, .. } if *prize < 0))
+            .count();
+    }
+    assert!(lost > 0, "DamageFactor=1 never took a prize in 20 hits");
+}
+
+#[test]
+fn damage_factor_zero_never_takes_a_prize() {
+    let mut s = bare();
+    for ship in &mut s.ships {
+        ship.damage_factor = 0;
+    }
+    let mut w = world_with(None, s);
+    w.add_ship(0, 0, 0);
+    w.ships[0].bounty = 10;
+    for _ in 0..50 {
+        let mut ev = Vec::new();
+        w.ships[0].energy = 500 * ENERGY_SCALE;
+        w.damage(0, 1, 50, 0, &mut ev);
+        assert!(!ev.iter().any(|e| matches!(e, Event::PrizeTaken { .. })));
+    }
+    // A ship with no bounty keeps its prizes too, whatever the factor.
+    let mut s = bare();
+    for ship in &mut s.ships {
+        ship.damage_factor = 1;
+    }
+    let mut w = world_with(None, s);
+    w.add_ship(0, 0, 0);
+    for _ in 0..50 {
+        let mut ev = Vec::new();
+        w.ships[0].bounty = 0;
+        w.ships[0].energy = 500 * ENERGY_SCALE;
+        w.damage(0, 1, 50, 0, &mut ev);
+        assert!(!ev.iter().any(|e| matches!(e, Event::PrizeTaken { .. })));
+    }
+}
+
+#[test]
+fn near_death_level_costs_one_bounty_per_crossing() {
+    let mut s = bare();
+    s.near_death_level = 500;
+    for ship in &mut s.ships {
+        ship.damage_factor = 0; // keep prizes out of it
+    }
+    let mut w = world_with(None, s);
+    w.add_ship(0, 0, 0);
+    w.ships[0].bounty = 3;
+    let mut ev = Vec::new();
+    // 1000 -> 900: still well above the level.
+    w.damage(0, 1, 100, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 3);
+    // 900 -> 400: crosses it, so one bounty goes.
+    w.damage(0, 1, 500, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 2);
+    // Already below: staying there costs nothing more.
+    w.damage(0, 1, 100, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 2);
+    // Back above and down again: a second crossing, a second bounty.
+    w.ships[0].energy = 1000 * ENERGY_SCALE;
+    w.damage(0, 1, 600, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 1);
+    // A ship with nothing to lose doesn't wrap round.
+    w.ships[0].bounty = 0;
+    w.ships[0].energy = 1000 * ENERGY_SCALE;
+    w.damage(0, 1, 600, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 0);
+    // Off by default.
+    let mut w = open_world();
+    w.add_ship(0, 0, 0);
+    w.ships[0].bounty = 3;
+    w.damage(0, 1, 900, 0, &mut ev);
+    assert_eq!(w.ships[0].bounty, 3);
+}
+
+#[test]
+fn prize_share_limit_shares_with_teammates_under_the_limit() {
+    let mut s = bare();
+    for ship in &mut s.ships {
+        ship.prize_share_limit = 100;
+    }
+    let mut w = world_with(None, s);
+    w.add_ship(0, 0, 7); // on the taker's team, under the limit
+    w.add_ship(1, 0, 7); // on the team but too rich
+    w.add_ship(2, 0, 9); // another team
+    w.ships[0].bounty = 99;
+    w.ships[1].bounty = 100;
+    w.ships[2].bounty = 0;
+    let mut ev = Vec::new();
+    w.share_prize(7, 42, Prize::Repel as i32, &mut ev);
+    assert_eq!(w.ships[0].items.repels, 1);
+    assert_eq!(w.ships[0].bounty, 100);
+    assert_eq!(w.ships[1].items.repels, 0);
+    assert_eq!(w.ships[2].items.repels, 0);
+    // Warp is never shared.
+    let before = w.ships[0].pos;
+    w.share_prize(7, 42, Prize::Warp as i32, &mut ev);
+    assert_eq!(w.ships[0].pos, before);
+    // Neither is a prize the taker picked up for themselves.
+    w.share_prize(7, 0, Prize::Repel as i32, &mut ev);
+    assert_eq!(w.ships[0].items.repels, 1);
+}

@@ -183,6 +183,13 @@ pub struct ShipSettings {
     /// 2 = L2 and up, 3 = L3 and up). ASSS documents 4 = L4 only, but the packet
     /// field is 2 bits wide.
     pub see_bomb_level: u8,
+    /// `Ship:DamageFactor`: how readily a hit costs the ship a prize. 0 never does;
+    /// otherwise a hit has a `1 / (factor * 200 / damage + 1)` chance, so 1 is
+    /// near-certain and 5000 is almost never. Not a damage multiplier.
+    pub damage_factor: u32,
+    /// `Ship:PrizeShareLimit`: a ship below this bounty still receives prizes a
+    /// teammate picks up (see [`crate::World::share_prize`]).
+    pub prize_share_limit: u32,
 }
 
 /// `Flag:Flagger*`: adjustments for players carrying flags (and ball carriers when
@@ -358,6 +365,10 @@ pub struct ArenaSettings {
     pub gravity_bombs: bool,
     /// How often a wormhole's destination changes (ticks; 0 = every trip).
     pub wormhole_switch_time: u32,
+    /// `Misc:NearDeathLevel`: energy (points) that counts as a near death. A hit that
+    /// takes a ship from above this level down to it or below costs it one bounty
+    /// (duelling zones). 0 disables it.
+    pub near_death_level: u32,
 }
 
 /// Stock ship block: every ship in a freshly installed zone uses these values.
@@ -442,6 +453,8 @@ pub const STOCK_SHIP: ShipSettings = ShipSettings {
     turret_speed_penalty: 0,
     see_mines: false,
     see_bomb_level: 0,
+    damage_factor: 30,
+    prize_share_limit: 100,
 };
 
 /// Stock flagger settings (ASSS public arena).
@@ -535,6 +548,7 @@ impl Default for ArenaSettings {
             soccer: STOCK_SOCCER,
             gravity_bombs: true,
             wormhole_switch_time: 100_000,
+            near_death_level: 0,
         }
     }
 }
@@ -640,6 +654,8 @@ impl ShipSettings {
             turret_speed_penalty: (s.turret_speed_penalty() as i32).max(0) as u32,
             see_mines: s.see_mines() != 0,
             see_bomb_level: s.see_bomb_level().min(3),
+            damage_factor: s.damage_factor() as u32,
+            prize_share_limit: s.prize_share_limit() as u32,
         }
     }
 }
@@ -724,6 +740,7 @@ impl ArenaSettings {
             },
             gravity_bombs: cs.gravity_bombs() != 0,
             wormhole_switch_time: clamp_u32(cs.wormhole_switch_time()),
+            near_death_level: short(cs.near_death_level()),
         }
     }
 }
@@ -814,6 +831,8 @@ impl ShipSettings {
         s.set_see_mines(self.see_mines as u8);
         // A 2-bit field: ASSS's documented 4 (L4 only) can't be sent.
         s.set_see_bomb_level(self.see_bomb_level.min(3));
+        s.set_damage_factor(u16_(self.damage_factor));
+        s.set_prize_share_limit(u16_(self.prize_share_limit));
     }
 }
 
@@ -899,6 +918,7 @@ impl ArenaSettings {
         cs.set_disable_ball_through_walls(b.no_wall_pass as u8);
         cs.set_gravity_bombs(self.gravity_bombs as u8);
         cs.set_wormhole_switch_time(self.wormhole_switch_time.min(i32::MAX as u32) as i32);
+        cs.set_near_death_level(i16_(self.near_death_level));
         cs.set_send_position_delay(20);
         cs.set_map_zoom_factor(10);
         cs
