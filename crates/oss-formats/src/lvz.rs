@@ -15,6 +15,23 @@
 //! A section with `file_time == 0` and an empty name holds object definitions
 //! ([`ObjectSection`]). Compressed bytes are kept as read, so archives rewrite
 //! byte for byte; [`Section::data`] inflates on demand.
+//!
+//! # `CLV1` screen objects are refused
+//!
+//! An object section is tagged `CLV1` or `CLV2`. [`ObjectData`]'s screen split —
+//! reference point in bits 0-3, signed 12-bit offset in bits 4-15 — is the `CLV2`
+//! layout, and a real Continuum client applies it to `CLV2` sections only: twelve
+//! `CLV1` screen objects written with distinct reference indices and offset 0
+//! rendered in a diagonal cascade at (0,0), (1,1) … (11,11), while the same objects
+//! written as `CLV2` rendered at twelve distinct reference points. What a `CLV1`
+//! screen object's words *do* mean is not known, so [`ObjectSection::parse`] returns
+//! [`FormatError::Unsupported`] for a `CLV1` section that holds one, rather than
+//! placing it somewhere wrong.
+//!
+//! `CLV1` *map* objects are read as usual: a map object's words are a plain signed
+//! pixel coordinate under either layout, and the `CLV1` map objects in real zone
+//! files (Trench Wars' `pubtiles.lvz` and `pubcover.lvz`) read as sensible
+//! tile-aligned map positions.
 
 use alloc::vec::Vec;
 
@@ -231,12 +248,22 @@ impl ObjectSection {
                 what: "LVZ object count",
                 offset: 4,
             })?;
-        let objects = data[12..obj_end]
+        let objects: Vec<ObjectData> = data[12..obj_end]
             .as_chunks::<10>()
             .0
             .iter()
             .map(|c| ObjectData::from_bytes(*c))
             .collect();
+        // A `CLV1` screen object's position words are not understood (see the
+        // module docs). Refuse rather than place it somewhere wrong.
+        if version == CLV1
+            && let Some(i) = objects.iter().position(|o| !o.is_map_object())
+        {
+            return Err(FormatError::Unsupported {
+                what: "LVZ CLV1 screen object",
+                offset: 12 + i * ObjectData::LEN,
+            });
+        }
         let mut pos = obj_end;
         let mut images = Vec::new();
         for _ in 0..n_img {
@@ -355,5 +382,76 @@ mod tests {
         assert!(s.data().is_err());
         assert!(ObjectSection::parse(b"CLV1\xff\0\0\0\0\0\0\0").is_err());
         assert!(ObjectSection::parse(b"CLV1\0\0\0\0\x01\0\0\0\x01\0").is_err());
+    }
+
+    /// A `CLV1` section is read as far as it can be: map objects yes, screen
+    /// objects no. See the module docs for why the screen words aren't guessed.
+    #[test]
+    fn clv1_screen_objects_are_refused_and_map_objects_are_not() {
+        let section = |objects| {
+            ObjectSection {
+                version: CLV1,
+                objects,
+                images: alloc::vec![],
+            }
+            .to_bytes()
+        };
+
+        // Map objects are a plain pixel coordinate under either layout.
+        let maps = section(alloc::vec![
+            ObjectData::map(1, 6752, 3728),
+            ObjectData::map(2, 11952, 7344),
+        ]);
+        let back = ObjectSection::parse(&maps).unwrap();
+        assert_eq!(back.version, CLV1);
+        assert_eq!(back.objects[1].map_x(), 11952);
+        assert_eq!(back.objects[1].map_y(), 7344);
+
+        // One screen object anywhere in the section refuses the whole section,
+        // and the offset points at the record that caused it.
+        let mixed = section(alloc::vec![
+            ObjectData::map(1, 6752, 3728),
+            ObjectData::screen(2, 4, 1231, 4, 6),
+        ]);
+        assert_eq!(
+            ObjectSection::parse(&mixed),
+            Err(FormatError::Unsupported {
+                what: "LVZ CLV1 screen object",
+                offset: 12 + ObjectData::LEN,
+            })
+        );
+
+        // The same words under a CLV2 tag are read as reference + offset.
+        let mut clv2 = mixed.clone();
+        clv2[..4].copy_from_slice(&CLV2);
+        let back = ObjectSection::parse(&clv2).unwrap();
+        assert_eq!(back.objects[1].x_ref(), 4);
+        assert_eq!(back.objects[1].screen_x(), 1231);
+    }
+
+    /// Trench Wars' `entermsg.lvz`, the file this refusal exists for: a `CLV1`
+    /// section whose one screen object has `x_word = 0x4CF4`, `y_word = 0x0064`.
+    /// Read with the `CLV2` layout that is "reference 4, offset +1231", which put
+    /// the entry banner off-screen in our client. We now decline to place it.
+    #[test]
+    fn the_trench_wars_entry_banner_is_refused_not_misplaced() {
+        let mut data = alloc::vec![];
+        data.extend_from_slice(&CLV1);
+        data.extend_from_slice(&1u32.to_le_bytes()); // one object
+        data.extend_from_slice(&1u32.to_le_bytes()); // one image
+        data.extend_from_slice(&0u16.to_le_bytes()); // id 0, screen object
+        data.extend_from_slice(&0x4CF4u16.to_le_bytes());
+        data.extend_from_slice(&0x0064u16.to_le_bytes());
+        data.extend_from_slice(&[0, 6]); // image 0, layer 6
+        data.extend_from_slice(&((2u16 << 12) | 90).to_le_bytes()); // EnterArena, 90
+        data.extend_from_slice(&[1, 0, 1, 0, 0, 0]); // 1x1 frames, no animation
+        data.extend_from_slice(b"entermsg.jpg\0");
+        assert_eq!(
+            ObjectSection::parse(&data),
+            Err(FormatError::Unsupported {
+                what: "LVZ CLV1 screen object",
+                offset: 12,
+            })
+        );
     }
 }

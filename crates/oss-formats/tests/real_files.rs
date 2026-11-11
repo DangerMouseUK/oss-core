@@ -76,13 +76,24 @@ fn lvz_files_round_trip() {
         let data = std::fs::read(&path).unwrap();
         let lvz = Lvz::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mut objects = 0;
+        let mut refused = 0;
         for s in &lvz.sections {
             let d = s
                 .data()
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             if s.is_object_section() {
-                let o = oss_formats::ObjectSection::parse(&d)
-                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                // A CLV1 section holding a screen object is refused on purpose:
+                // the layout of those words isn't known. The file itself still
+                // has to rewrite byte for byte, which the check below covers.
+                let o = match oss_formats::ObjectSection::parse(&d) {
+                    Ok(o) => o,
+                    Err(e @ oss_formats::FormatError::Unsupported { .. }) => {
+                        println!("{}: object section not read: {e}", path.display());
+                        refused += 1;
+                        continue;
+                    }
+                    Err(e) => panic!("{}: {e}", path.display()),
+                };
                 assert_eq!(
                     o.to_bytes(),
                     d,
@@ -93,7 +104,7 @@ fn lvz_files_round_trip() {
             }
         }
         println!(
-            "{}: sections={} objects={objects}",
+            "{}: sections={} objects={objects} refused={refused}",
             path.display(),
             lvz.sections.len()
         );

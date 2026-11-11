@@ -120,7 +120,7 @@ impl ObjectData {
     }
 
     /// A screen object at offsets from reference points (offsets are truncated to
-    /// signed 12 bits).
+    /// signed 12 bits). This is the `CLV2` layout; see [`Self::screen_x`].
     pub fn screen(id: u16, x_ref: u8, x: i16, y_ref: u8, y: i16) -> Self {
         let pack = |r: u8, v: i16| (u16::from(r) & 0xF) | ((v as u16) << 4);
         let mut o = Self {
@@ -152,19 +152,25 @@ impl ObjectData {
     pub fn map_y(&self) -> i16 {
         self.y_word as i16
     }
-    /// Screen object x reference point ([`reference`](mod@reference)).
+    /// Screen object x reference point ([`reference`](mod@reference)), `CLV2` layout.
     pub fn x_ref(&self) -> u8 {
         (self.x_word & 0xF) as u8
     }
-    /// Screen object x offset.
+    /// Screen object x offset from [`Self::x_ref`].
+    ///
+    /// This split — reference point in bits 0-3, signed 12-bit offset in bits 4-15 —
+    /// is the layout Continuum applies to **`CLV2`** object sections. It does not
+    /// apply to `CLV1` sections, whose screen words are not understood;
+    /// `oss_formats`'s LVZ reader refuses those rather than mis-reading them.
     pub fn screen_x(&self) -> i16 {
         sign12(self.x_word >> 4)
     }
-    /// Screen object y reference point.
+    /// Screen object y reference point, `CLV2` layout.
     pub fn y_ref(&self) -> u8 {
         (self.y_word & 0xF) as u8
     }
-    /// Screen object y offset.
+    /// Screen object y offset from [`Self::y_ref`], `CLV2` layout (see
+    /// [`Self::screen_x`]).
     pub fn screen_y(&self) -> i16 {
         sign12(self.y_word >> 4)
     }
