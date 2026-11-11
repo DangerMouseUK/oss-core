@@ -3,7 +3,7 @@
 //! Any client, bot, server or library, in any language, can use it to show
 //! that it speaks the protocol correctly. It has three parts:
 //!
-//! * **Vectors** ([`vectors`], [`adapter`]): 3,715 offline checks built
+//! * **Vectors** ([`vectors`], [`adapter`]): 3,761 offline checks built
 //!   from published test vectors, most produced by running unmodified reference
 //!   implementations. They cover:
 //!   * VIE encryption;
