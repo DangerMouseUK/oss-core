@@ -52,9 +52,14 @@ pub trait Cipher: Send {
     }
 
     /// Which encryption family this is. Servers use it to tell SubSpace (VIE)
-    /// clients from Continuum clients, e.g. for the login packet length check.
+    /// clients from Continuum clients, e.g. for the login packet length check,
+    /// and clients use it to pick the login form to send: a zone chooses which
+    /// form it expects from the encryption rather than from the packet's type
+    /// byte, and sending the wrong one is dropped without an error.
+    ///
     /// External implementations should override it; the default is
-    /// [`CipherKind::Other`].
+    /// [`CipherKind::Other`], which tells a caller nothing and so turns that
+    /// check off for connections using the cipher.
     fn kind(&self) -> CipherKind {
         CipherKind::Other
     }
