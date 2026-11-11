@@ -82,18 +82,23 @@ fn lvz_files_round_trip() {
                 .data()
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             if s.is_object_section() {
-                // A CLV1 section holding a screen object is refused on purpose:
-                // the layout of those words isn't known. The file itself still
-                // has to rewrite byte for byte, which the check below covers.
-                let o = match oss_formats::ObjectSection::parse(&d) {
-                    Ok(o) => o,
-                    Err(e @ oss_formats::FormatError::Unsupported { .. }) => {
-                        println!("{}: object section not read: {e}", path.display());
-                        refused += 1;
-                        continue;
-                    }
-                    Err(e) => panic!("{}: {e}", path.display()),
-                };
+                let o = oss_formats::ObjectSection::parse_with_clv1(&d)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                // A CLV1 screen object reaches a caller only through
+                // parse_with_clv1; the plain parser must still refuse it, so that
+                // CLV2-shaped code can never be handed one.
+                if o.layout() == oss_formats::ObjectLayout::Clv1
+                    && o.objects.iter().any(|d| !d.is_map_object())
+                {
+                    let e = oss_formats::ObjectSection::parse(&d).unwrap_err();
+                    assert!(
+                        matches!(e, oss_formats::FormatError::Unsupported { .. }),
+                        "{}: plain parse should refuse CLV1 screen objects, got {e}",
+                        path.display()
+                    );
+                    println!("{}: CLV1 screen objects: {e}", path.display());
+                    refused += 1;
+                }
                 assert_eq!(
                     o.to_bytes(),
                     d,
@@ -104,7 +109,7 @@ fn lvz_files_round_trip() {
             }
         }
         println!(
-            "{}: sections={} objects={objects} refused={refused}",
+            "{}: sections={} objects={objects} clv1_screen_sections={refused}",
             path.display(),
             lvz.sections.len()
         );

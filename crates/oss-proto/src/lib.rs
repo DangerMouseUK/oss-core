@@ -36,7 +36,7 @@ pub mod wire;
 pub use c2s::C2SPacket;
 pub use control::CorePacket;
 pub use error::DecodeError;
-pub use objects::ObjectData;
+pub use objects::{CLV1_BOX, Clv1Reference, ObjectData, ObjectLayout};
 pub use position::{
     C2SPosition, ExtraPositionData, PositionTail, S2CPosition, S2CWeapon, WeaponInfo,
 };

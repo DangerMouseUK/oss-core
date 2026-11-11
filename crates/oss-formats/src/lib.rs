@@ -17,7 +17,9 @@ pub mod replay;
 pub use elvl::{AutoWarp, Chunk, Metadata, Region, RegionChunk};
 pub use error::FormatError;
 pub use lvl::{GridStats, Level, MAP_SIZE, TileEntry, TileGrid, Tileset};
-pub use lvz::{ImageDef, Lvz, ObjectSection, Section};
+pub use lvz::{
+    CLV1_BOX, Clv1Reference, ImageDef, Lvz, ObjectData, ObjectLayout, ObjectSection, Section,
+};
 pub use region::RegionBitmap;
 pub use replay::{Record, RecordKind, Replay};
 
