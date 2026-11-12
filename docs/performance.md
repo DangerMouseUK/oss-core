@@ -14,7 +14,7 @@ cargo run --release -p oss-net --example soak -- --help
 
 Always build with `--release`.
 
-**Exit status.** The harness exits with status 1 if any reliable packet was lost, or if `--max-cpu PCT` is given and the server needs more than that share of a core. CI uses `--max-cpu 20` as a budget check.
+**Exit status.** The harness exits with status 1 if any reliable packet was lost, or if `--max-cpu PCT` is given and the server needs more than that share of a core. CI's `soak` job runs two: the default fan-out at `--max-cpu 20`, and `--fanout 82 --max-cpu 12`, the whole-map case ASSS's relay rules really produce. The crowded case (`--fanout 350`) is not gated, because it does not currently fit the budget; gating it would mean choosing a threshold it fails.
 
 **Reproducibility.** Everything runs in one thread on a simulated clock. Each direction of each player's link has its own seeded random stream, so the same arguments produce identical traffic and identical packet, datagram and delivery counts on any machine. Only the timings vary with the hardware.
 
@@ -33,7 +33,9 @@ Always build with `--release`.
 | `--cipher` | `vie` | `none`, `vie` or `opensec` |
 | `--seed` | 1 | random seed |
 
-**What a fan-out of 30 means.** SubSpace servers don't send every player's position to everyone: far-away players are updated rarely or not at all. A fan-out of 30 at 10 Hz approximates a crowded arena, where each player sees about 30 others. A real server's arena logic, such as radar range and weapon relay, is not simulated. Only the transport cost of the resulting traffic is measured.
+**What the fan-out means.** SubSpace servers don't send every player's position to everyone: far-away players are updated rarely or not at all. A real server's arena logic, such as radar range and weapon relay, is not simulated here; only the transport cost of the resulting traffic is measured.
+
+The default of 30 is a smoke-test value, not a crowded arena. Running oss-server's zone harness against the real ASSS relay rules (`oss-server/docs/performance.md`) gives, for 500 players all in ships, about **82** recipients per position over a whole map, **210** over half of it and **350** over a quarter. Those are the fan-outs to use when asking whether the budget closes; see [Fan-out](#fan-out-what-asss-relay-rules-cost) below.
 
 ## What is measured
 
@@ -87,6 +89,25 @@ Measured on 2026-11-08: Intel Core i9-7980XE at 2.6 GHz (4 cores visible), Windo
 
 Every run lost no reliable packets. Most of the allocations come from churn, since each new connection allocates its state. Without churn, loss or jitter, VIE at 500 players makes about 28 allocations per second (from reliable broadcast bursts) and uses 2.7% of a core.
 
+### Fan-out: what ASSS relay rules cost
+
+Measured 2026-11-12 on the machine above, 500 players, VIE, 60 s, two runs each. The fan-out-30 row is the control: it reproduced the 2026-11-08 figure above (2.80% / 179 ns against 2.8% / 178 ns), so these runs are comparable with it.
+
+| Fan-out | Arena it represents | Server CPU | ns per packet | Packets out per s | Datagrams out per s | Packets per datagram |
+|---|---|---|---|---|---|---|
+| 30 | smoke test | 2.8–3.1% | 179–201 | 151,348 | 49,064 | 3.1 |
+| **82** | **whole map** | **5.1%** | 123–126 | 406,135 | 51,142 | 7.9 |
+| **210** | **half the map** | **11.5%** | 110–112 | 1,033,675 | 51,676 | 20.0 |
+| **350** | **a quarter of it** | **19.9–21.3%** | 115–123 | 1,719,773 | 87,825 | 19.6 |
+
+**Cost per packet falls as fan-out rises**, from about 180 ns to about 120 ns, because clustering packs more packets into each datagram. From fan-out 30 to 82 the packet rate rises 2.7 times while the datagram rate rises 4%: the extra packets ride in datagrams that were being sent anyway. Clustering saturates at about 20 packets per datagram (a full VIE datagram of 16-byte position packets), after which datagrams grow with packets again — which is why 350 is no cheaper per packet than 210.
+
+So the estimate in oss-server's doc, which multiplied 1.8M packets/s by the fan-out-30 cost of 178 ns and got roughly 32% of a core, was **pessimistic by about half**. The measured figure is 19.9–21.3%. It is still over the budget on its own.
+
+With OpenSec instead of VIE, the same runs cost 8.4% (fan-out 82), 15.8% (210) and 27.8% (350).
+
+**Allocations.** At fan-out 210 and above the server allocates on the hot path again: 5,913/s at 210 and 28,348/s at 350, against 145/s at fan-out 30. That is the same class of problem as the buffer-pool limit described under [Change found by the harness](#change-found-by-the-harness) — one tick at fan-out 350 queues about 17,000 packets, far past the pool's 8-per-connection sizing — and it is not yet fixed. Some of the 20% above is that allocation traffic, so the crowded figure may improve once the pool is sized for it.
+
 **Reading the numbers against the 20% budget:**
 
 | Encryption | 500 players | 1,000 players |
@@ -95,7 +116,7 @@ Every run lost no reliable packets. Most of the allocations come from churn, sin
 | OpenSec (portable build) | 5% | 13% |
 | OpenSec with `opensec-ring` | 4% | 11% |
 
-The rest of the budget is left for game logic. Cost per packet grows with player count (165 to 197 ns unencrypted), mainly from cache pressure as connection state grows.
+Those are fan-out-30 figures, so they are a floor, not the budget case. At the fan-out ASSS really produces the transport takes 5.1% (whole map), 11.5% (half) or 19.9–21.3% (a quarter) with VIE. The rest of the budget is left for game logic, which oss-server measures at 7.4–9.0% for the same arenas — so the two halves fit under 20% over a whole map, sit at about 19% over half of it, and reach about 30% in a quarter. See oss-server's `docs/performance.md` for the combined table. Cost per packet grows with player count (165 to 197 ns unencrypted), mainly from cache pressure as connection state grows.
 
 **Overload.** With a reliable chat from each of 1,000 players every 10 s, every client must receive 100 reliable packets a second. Add 10% loss and 40-90 ms delay, and some links cannot keep up. The server then disconnects them with `QueueOverflow` (the `max_queue` limit), as designed: no packet is lost for players who stay connected. Command to reproduce:
 
