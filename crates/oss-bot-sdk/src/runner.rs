@@ -51,13 +51,11 @@ pub fn run(
     loop {
         match socket.recv(&mut buf) {
             Ok(n) => bot.handle_datagram(now(), &buf[..n]),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::ConnectionReset
-                ) => {}
+            // Nothing to read this tick. `ConnectionReset` is Windows reporting
+            // an ICMP port-unreachable for an earlier send, which on UDP says
+            // nothing about this socket; OS error 997 is a read still in
+            // progress. Neither should end the bot's session.
+            Err(e) if oss_net::would_block(&e) || e.kind() == io::ErrorKind::ConnectionReset => {}
             Err(e) => return Err(e),
         }
         let t = now();

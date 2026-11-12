@@ -22,6 +22,20 @@ fn ms(start: Instant) -> u64 {
     start.elapsed().as_millis() as u64
 }
 
+/// Waits for one binary message, giving up rather than spinning for ever if the
+/// peer never sends one: `read_binary` reports a closed connection as "nothing
+/// yet", so without a deadline a failed handshake hangs the test instead of
+/// failing it.
+fn await_binary<S: std::io::Read + std::io::Write>(ws: &mut WebSocket<S>, what: &str) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Some(b) = read_binary(ws) {
+            return b;
+        }
+    }
+    panic!("no {what} arrived within 20s");
+}
+
 fn frame(f: &Frame<'_>) -> Message {
     let mut b = Vec::new();
     f.encode(&mut b).unwrap();
@@ -33,14 +47,9 @@ fn read_binary<S: std::io::Read + std::io::Write>(ws: &mut WebSocket<S>) -> Opti
     match ws.read() {
         Ok(Message::Binary(b)) => Some(b.to_vec()),
         Ok(_) => None,
-        Err(tungstenite::Error::Io(e))
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) =>
-        {
-            None
-        }
+        // Nothing has arrived yet. On Windows that includes OS error 997, which
+        // reports a read that is still running and is not a failure.
+        Err(tungstenite::Error::Io(e)) if oss_net::would_block(&e) => None,
         Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => None,
         Err(e) => panic!("websocket: {e}"),
     }
@@ -68,11 +77,7 @@ fn relay_zone(listener: TcpListener, opensec: bool, stop: Arc<AtomicBool>) {
         .unwrap();
 
     // Hello, then Welcome.
-    let hello = loop {
-        if let Some(b) = read_binary(&mut ws) {
-            break b;
-        }
-    };
+    let hello = await_binary(&mut ws, "Hello");
     assert!(matches!(
         Frame::decode(&hello),
         Ok(Frame::Hello {
@@ -147,11 +152,7 @@ fn run(opensec: bool) {
         zone: "",
     }))
     .unwrap();
-    let welcome = loop {
-        if let Some(b) = read_binary(&mut ws) {
-            break b;
-        }
-    };
+    let welcome = await_binary(&mut ws, "Welcome");
     assert!(matches!(
         Frame::decode(&welcome),
         Ok(Frame::Welcome {
