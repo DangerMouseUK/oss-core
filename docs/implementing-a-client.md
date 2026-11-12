@@ -112,7 +112,7 @@ oss-conformance client --bind 127.0.0.1:5000
 
 It checks the connection request, login, acknowledgements, arena entry, map download, position checksums, time sync and all three security checksums (see [conformance.md](conformance.md)).
 
-For a client in another language, `oss-conformance vectors -- <your adapter>` also checks your packet codecs, ciphers and checksums against 3,715 test vectors.
+For a client in another language, `oss-conformance vectors -- <your adapter>` also checks your packet codecs, ciphers and checksums against 3,761 test vectors.
 
 ## Browsers
 
