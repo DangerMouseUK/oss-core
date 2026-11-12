@@ -91,14 +91,10 @@ fn session(stream: std::net::TcpStream) -> tungstenite::Result<()> {
                 },
                 Ok(Message::Close(_)) => return Ok(()),
                 Ok(_) => {}
-                Err(tungstenite::Error::Io(e))
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    break;
-                }
+                // Nothing more to read this tick. On Windows that includes OS
+                // error 997, a read still in progress: treating it as fatal
+                // would drop a browser client that is doing nothing wrong.
+                Err(tungstenite::Error::Io(e)) if oss_net::would_block(&e) => break,
                 Err(e) => return Err(e),
             }
         }

@@ -1232,13 +1232,10 @@ fn next_registration(
                 return Ok(Some((buf[..n].to_vec(), src)));
             }
             Ok(_) => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::ConnectionReset
-                ) => {}
+            // Nothing has arrived yet: a timeout, a Windows ICMP-driven
+            // `ConnectionReset` for an earlier send, or OS error 997 for a read
+            // still in progress. Keep waiting until `until`.
+            Err(e) if oss_net::would_block(&e) || e.kind() == io::ErrorKind::ConnectionReset => {}
             Err(e) => return Err(e),
         }
     }
