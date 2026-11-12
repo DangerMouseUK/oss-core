@@ -5,13 +5,14 @@
 //! packets ignore trailing bytes when decoding.
 
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::DecodeError;
 use crate::common::{DamageData, read_entries};
 use crate::fixed_packet;
 use crate::position::C2SPosition;
 use crate::s2c::{ChatBody, packet_enum};
-use crate::wire::{FixedStr, Packet, Raw, Reader, Wire, Writer, expect_type};
+use crate::wire::{FixedStr, Packet, Raw, Reader, Redacted, Wire, Writer, expect_type};
 
 /// C2S type bytes.
 pub mod kind {
@@ -303,7 +304,7 @@ impl Packet for C2SChat {
 ///
 /// Servers decide which length to expect from the encryption the connection
 /// negotiated, not from the type byte.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Login {
     /// `0x09` or `0x24`, kept so the packet re-encodes as received.
     pub kind: u8,
@@ -352,6 +353,29 @@ pub mod client_features {
     pub const REDIRECT: u16 = 0x10;
     /// Understands select boxes (S2C `0x3C`).
     pub const SELECT_BOX: u16 = 0x20;
+}
+
+/// Written by hand so the password never reaches a log; every other field
+/// prints as it would from `derive`. See [`Redacted`].
+impl fmt::Debug for Login {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Login")
+            .field("kind", &self.kind)
+            .field("flags", &self.flags)
+            .field("name", &self.name)
+            .field("password", &Redacted)
+            .field("machine_id", &self.machine_id)
+            .field("connect_type", &self.connect_type)
+            .field("timezone_bias", &self.timezone_bias)
+            .field("unknown1", &self.unknown1)
+            .field("client_version", &self.client_version)
+            .field("field444", &self.field444)
+            .field("field555", &self.field555)
+            .field("permission_id", &self.permission_id)
+            .field("reserved", &self.reserved)
+            .field("cont_id", &self.cont_id)
+            .finish()
+    }
 }
 
 impl Login {

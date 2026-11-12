@@ -11,9 +11,10 @@
 //!   usually large and arrives as big or sized data.
 
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::DecodeError;
-use crate::wire::{FixedStr, Reader, Wire, Writer};
+use crate::wire::{FixedStr, Reader, Redacted, Wire, Writer};
 
 /// Default port for client zone-list requests.
 pub const CLIENT_PORT: u16 = 4990;
@@ -29,7 +30,7 @@ pub const UPDATE_PORT: u16 = 4991;
 /// Directory servers check that the name and password fields end with a NUL,
 /// treat only the first 16 password bytes as the password and require bytes
 /// 62-93 (the rest of the password field) to be zero.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct ZoneUpdate {
     /// Always sent as 0; the directory uses the datagram's source address.
     pub ip: u32,
@@ -47,6 +48,23 @@ pub struct ZoneUpdate {
     pub password: FixedStr<48>,
     /// Zone description (sent NUL-terminated; ASSS caps it at 385 bytes).
     pub description: Vec<u8>,
+}
+
+/// Written by hand so the directory password never reaches a log; every other
+/// field prints as it would from `derive`. See [`Redacted`].
+impl fmt::Debug for ZoneUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZoneUpdate")
+            .field("ip", &self.ip)
+            .field("port", &self.port)
+            .field("players", &self.players)
+            .field("score_keeping", &self.score_keeping)
+            .field("version", &self.version)
+            .field("name", &self.name)
+            .field("password", &Redacted)
+            .field("description", &self.description)
+            .finish()
+    }
 }
 
 impl ZoneUpdate {

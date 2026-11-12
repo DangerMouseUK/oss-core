@@ -7,9 +7,10 @@
 //! packet; servers cap them at about 250 bytes.
 
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::DecodeError;
-use crate::wire::{FixedStr, Raw, Reader, Wire, Writer};
+use crate::wire::{FixedStr, Raw, Reader, Redacted, Wire, Writer};
 
 /// A player's score as exchanged with the biller (14 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,7 +70,7 @@ pub mod login_result {
 }
 
 /// Zone-to-biller user login (type `0x04`).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct UserLogin {
     /// 1 to create the account.
     pub make_new: u8,
@@ -96,6 +97,27 @@ pub struct UserLogin {
     /// Client-specific data to the end of the packet (the Continuum id: 64
     /// bytes; empty for SubSpace clients).
     pub extra: Vec<u8>,
+}
+
+/// Written by hand so the player's password never reaches a log; every other
+/// field prints as it would from `derive`. See [`Redacted`].
+impl fmt::Debug for UserLogin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UserLogin")
+            .field("make_new", &self.make_new)
+            .field("ip", &self.ip)
+            .field("name", &self.name)
+            .field("password", &Redacted)
+            .field("connection_id", &self.connection_id)
+            .field("machine_id", &self.machine_id)
+            .field("timezone", &self.timezone)
+            .field("timezone_high", &self.timezone_high)
+            .field("unknown", &self.unknown)
+            .field("sysop", &self.sysop)
+            .field("client_version", &self.client_version)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 /// Biller-to-zone login response (type `0x01`).
@@ -160,7 +182,7 @@ impl BillingIdentity {
 }
 
 /// Packets from the zone to the biller.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ServerToBiller {
     /// `0x01`: keep-alive.
@@ -324,6 +346,179 @@ pub enum ServerToBiller {
         /// The whole packet.
         data: Vec<u8>,
     },
+}
+
+/// Written by hand for one reason: [`ServerToBiller::ServerConnect`] carries the
+/// zone's biller password, which `derive` would print. Every other variant is
+/// spelled out exactly as `derive` would render it, so nothing is lost from a
+/// log; the match is exhaustive, so a new variant cannot skip this quietly.
+/// See [`Redacted`].
+impl fmt::Debug for ServerToBiller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ping => f.write_str("Ping"),
+            Self::ServerConnect {
+                server_id,
+                group_id,
+                score_id,
+                name,
+                port,
+                password: _,
+            } => f
+                .debug_struct("ServerConnect")
+                .field("server_id", server_id)
+                .field("group_id", group_id)
+                .field("score_id", score_id)
+                .field("name", name)
+                .field("port", port)
+                .field("password", &Redacted)
+                .finish(),
+            Self::ServerDisconnect => f.write_str("ServerDisconnect"),
+            Self::UserLogin(l) => f.debug_tuple("UserLogin").field(l).finish(),
+            Self::UserLogoff {
+                connection_id,
+                reason,
+                latency,
+                ping,
+                loss_s2c,
+                loss_c2s,
+                score,
+            } => f
+                .debug_struct("UserLogoff")
+                .field("connection_id", connection_id)
+                .field("reason", reason)
+                .field("latency", latency)
+                .field("ping", ping)
+                .field("loss_s2c", loss_s2c)
+                .field("loss_c2s", loss_c2s)
+                .field("score", score)
+                .finish(),
+            Self::RemoteZoneMessage {
+                connection_id,
+                server_id,
+                kind,
+                sound,
+                text,
+            } => f
+                .debug_struct("RemoteZoneMessage")
+                .field("connection_id", connection_id)
+                .field("server_id", server_id)
+                .field("kind", kind)
+                .field("sound", sound)
+                .field("text", text)
+                .finish(),
+            Self::RemotePermit {
+                connection_id,
+                server_id,
+                name,
+            } => f
+                .debug_struct("RemotePermit")
+                .field("connection_id", connection_id)
+                .field("server_id", server_id)
+                .field("name", name)
+                .finish(),
+            Self::UserRemotePrivate {
+                connection_id,
+                group_id,
+                kind,
+                sound,
+                text,
+            } => f
+                .debug_struct("UserRemotePrivate")
+                .field("connection_id", connection_id)
+                .field("group_id", group_id)
+                .field("kind", kind)
+                .field("sound", sound)
+                .field("text", text)
+                .finish(),
+            Self::RequestFile { name } => {
+                f.debug_struct("RequestFile").field("name", name).finish()
+            }
+            Self::UserDemographics {
+                connection_id,
+                data,
+            } => f
+                .debug_struct("UserDemographics")
+                .field("connection_id", connection_id)
+                .field("data", data)
+                .finish(),
+            Self::UserPrivateChat {
+                source,
+                destination,
+                text,
+            } => f
+                .debug_struct("UserPrivateChat")
+                .field("source", source)
+                .field("destination", destination)
+                .field("text", text)
+                .finish(),
+            Self::SecurityViolation {
+                connection_id,
+                text,
+            } => f
+                .debug_struct("SecurityViolation")
+                .field("connection_id", connection_id)
+                .field("text", text)
+                .finish(),
+            Self::UserBanner {
+                connection_id,
+                banner,
+            } => f
+                .debug_struct("UserBanner")
+                .field("connection_id", connection_id)
+                .field("banner", banner)
+                .finish(),
+            Self::UserScore {
+                connection_id,
+                score,
+            } => f
+                .debug_struct("UserScore")
+                .field("connection_id", connection_id)
+                .field("score", score)
+                .finish(),
+            Self::UserScoreMessage {
+                connection_id,
+                score_id,
+                kind,
+                sound,
+                text,
+            } => f
+                .debug_struct("UserScoreMessage")
+                .field("connection_id", connection_id)
+                .field("score_id", score_id)
+                .field("kind", kind)
+                .field("sound", sound)
+                .field("text", text)
+                .finish(),
+            Self::UserCommand {
+                connection_id,
+                text,
+            } => f
+                .debug_struct("UserCommand")
+                .field("connection_id", connection_id)
+                .field("text", text)
+                .finish(),
+            Self::UserChannelChat {
+                connection_id,
+                channel,
+                text,
+            } => f
+                .debug_struct("UserChannelChat")
+                .field("connection_id", connection_id)
+                .field("channel", channel)
+                .field("text", text)
+                .finish(),
+            Self::ServerCapabilities { flags } => f
+                .debug_struct("ServerCapabilities")
+                .field("flags", flags)
+                .finish(),
+            Self::Unknown { kind, data } => f
+                .debug_struct("Unknown")
+                .field("kind", kind)
+                .field("data", data)
+                .finish(),
+        }
+    }
 }
 
 /// Packets from the biller to the zone.
