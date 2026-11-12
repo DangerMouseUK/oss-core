@@ -91,22 +91,22 @@ Every run lost no reliable packets. Most of the allocations come from churn, sin
 
 ### Fan-out: what ASSS relay rules cost
 
-Measured 2026-11-12 on the machine above, 500 players, VIE, 60 s. **The machine was not idle** (see [Measuring under load](#measuring-under-load)), so every row is the median of three runs, each immediately preceded by its own `--fanout 30` control run. All twelve of those controls landed between 2.84% and 3.13% against the 2.8% recorded on 2026-11-08, so each figure below comes from a window known to be only mildly loaded.
+Measured 2026-11-12 on the machine above, 500 players, VIE, 60 s. **The machine was not idle** (see [Measuring under load](#measuring-under-load)), so every figure is the median of three runs, each immediately preceded by its own `--fanout 30` control run, and the whole set was taken twice: once with the machine at 99% busy and again at 51%, after two of the competing jobs stopped.
 
-| Fan-out | Arena it represents | Server CPU | spread | ns per packet | Packets out per s | Datagrams out per s | Packets per datagram |
+| Fan-out | Arena it represents | Server CPU | busy / quiet medians | ns per packet | Packets out per s | Datagrams out per s | Packets per datagram |
 |---|---|---|---|---|---|---|---|
-| 30 | smoke test (control) | 2.9% | 2.84–3.13 | 187–189 | 151,348 | 49,064 | 3.1 |
-| **82** | **whole map** | **5.3%** | 5.23–5.61 | 127–136 | 406,135 | 51,142 | 7.9 |
-| **210** | **half the map** | **11.7%** | 11.62–11.98 | 112–115 | 1,033,675 | 51,676 | 20.0 |
-| **350** | **a quarter of it** | **20.0%** | 19.65–20.60 | 114–119 | 1,719,773 | 87,825 | 19.6 |
+| 30 | smoke test (control) | 2.9% | 2.94 / 2.91 | 187–189 | 151,348 | 49,064 | 3.1 |
+| **82** | **whole map** | **5.3%** | 5.30 / 5.34 | 127–136 | 406,135 | 51,142 | 7.9 |
+| **210** | **half the map** | **11.6%** | 11.71 / 11.63 | 112–115 | 1,033,675 | 51,676 | 20.0 |
+| **350** | **a quarter of it** | **19.6%** | 20.02 / 19.59 | 114–119 | 1,719,773 | 87,825 | 19.6 |
 
-The controls average 2.94% against a clean 2.8%, so these windows inflate a measurement by roughly 5%. Deflating by that puts the three rows at about 5.0%, 11.2% and 19.1%. The traffic columns are load-independent: the harness is deterministic, and those counts are identical on any machine.
+The two conditions agree to within 2%, and the control itself barely moved (2.94% against 2.91%) across a load change from 99% to 51%. A single-threaded harness gets a core either way; what the load actually produces is the occasional burst swallowing a whole run, not a steady tax. That is why the method is a control beside every run rather than a quiet machine. The traffic columns are load-independent in any case: the harness is deterministic, so those counts are identical on any machine.
 
 **Cost per packet falls as fan-out rises**, from about 180 ns to about 120 ns, because clustering packs more packets into each datagram. From fan-out 30 to 82 the packet rate rises 2.7 times while the datagram rate rises 4%: the extra packets ride in datagrams that were being sent anyway. Clustering saturates at about 20 packets per datagram (a full VIE datagram of 16-byte position packets), after which datagrams grow with packets again — which is why 350 is no cheaper per packet than 210.
 
-So the estimate in oss-server's doc, which multiplied 1.8M packets/s by the fan-out-30 cost of 178 ns and got roughly 32% of a core, was **pessimistic by about half**. The measured figure is 20.0% (19.65–20.60 across runs). That is at the budget, for the transport alone, with the whole of the game logic still to pay for.
+So the estimate in oss-server's doc, which multiplied 1.8M packets/s by the fan-out-30 cost of 178 ns and got roughly 32% of a core, was **pessimistic by about half**. The measured figure is 19.6% (19.39–20.60 across both load conditions). That is essentially the whole budget, for the transport alone, with the game logic still to pay for.
 
-With OpenSec instead of VIE, the same paired-control method gives 8.6% (fan-out 82), 16.0% (210) and 28.9% (350).
+With OpenSec instead of VIE, the same paired-control method gives 8.5% (fan-out 82), 16.0% (210) and 27.5% (350).
 
 **Allocations.** At fan-out 210 and above the server allocates on the hot path again: 5,913/s at 210 and 28,348/s at 350, against 145/s at fan-out 30. That is the same class of problem as the buffer-pool limit described under [Change found by the harness](#change-found-by-the-harness) — one tick at fan-out 350 queues about 17,000 packets, far past the pool's 8-per-connection sizing — and it is not yet fixed. Some of the 20% above is that allocation traffic, so the crowded figure may improve once the pool is sized for it.
 
@@ -116,7 +116,9 @@ These figures were taken on a shared desktop running an unrelated six-thread job
 
 The method was to pair every measurement with a `--fanout 30` control run immediately before it, and to use the control as a load probe: the harness is deterministic, so the control's *traffic* is fixed and only its *timing* moves. It earned its keep. In one interleaved sequence a control came back at 5.55% / 355 ns, nearly double its neighbours (2.92–2.96%), which is a burst landing inside a single 60-second run. A lone control taken at the start of a session would not have caught that, and the run beside it would have been published as a measurement.
 
-Figures that are to be relied on should come from the CI `soak` job, where the runner is clean. The numbers here are good enough to say where the cliff is and what to gate; they are not precise to better than about 5%.
+Repeating the whole set after two of the competing jobs stopped (99% busy down to 51%) moved every figure by under 2%, and moved the control by 0.03 points. So the figures are not artefacts of a loaded box; the load shows up as rare bursts inside individual runs, which pairing catches, rather than as a steady offset. Memory is worth a glance too, not just CPU: this machine has 18 GB, and a sibling job's 9.8 GB working set earlier in the day would have contended for bandwidth in a way CI never will.
+
+Figures to rely on should still come from the CI `soak` job, where the runner is clean. The numbers here are good to a few percent, which is enough to locate the cliff and set a gate.
 
 **Reading the numbers against the 20% budget:**
 
@@ -126,7 +128,7 @@ Figures that are to be relied on should come from the CI `soak` job, where the r
 | OpenSec (portable build) | 5% | 13% |
 | OpenSec with `opensec-ring` | 4% | 11% |
 
-Those are fan-out-30 figures, so they are a floor, not the budget case. At the fan-out ASSS really produces the transport takes 5.3% (whole map), 11.7% (half) or 20.0% (a quarter) with VIE. The rest of the budget is left for game logic, which oss-server measures at 6.9–8.1% for the same arenas — so the two halves fit under 20% over a whole map (about 12%), sit at about 19% over half of it, and reach about 28% in a quarter. See oss-server's `docs/performance.md` for the combined table. Cost per packet grows with player count (165 to 197 ns unencrypted), mainly from cache pressure as connection state grows.
+Those are fan-out-30 figures, so they are a floor, not the budget case. At the fan-out ASSS really produces the transport takes 5.3% (whole map), 11.6% (half) or 19.6% (a quarter) with VIE. The rest of the budget is left for game logic, which oss-server measures at 6.4–7.5% for the same arenas — so the two halves fit under 20% over a whole map (about 12%), sit at about 18% over half of it, and reach about 27% in a quarter. See oss-server's `docs/performance.md` for the combined table. Cost per packet grows with player count (165 to 197 ns unencrypted), mainly from cache pressure as connection state grows.
 
 **Overload.** With a reliable chat from each of 1,000 players every 10 s, every client must receive 100 reliable packets a second. Add 10% loss and 40-90 ms delay, and some links cannot keep up. The server then disconnects them with `QueueOverflow` (the `max_queue` limit), as designed: no packet is lost for players who stay connected. Command to reproduce:
 
