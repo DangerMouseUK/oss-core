@@ -24,4 +24,12 @@ Shared Rust crates for Open SubSpace (a SubSpace/Continuum-compatible client and
   broken intra-doc link, a bad code fence. On 2026-11-11 `main` went red on exactly that (a doc comment
   linking to a private constant) after fmt, clippy and tests all passed locally and the consuming repo
   compiled clean against the change.
+  **And the writing form reformats every file in the workspace, including ones another
+  session has uncommitted.** Harmless while one session worked at a time; not harmless now.
+  On 2026-11-12 two sessions reformatted each other's in-progress files within one hour, in
+  opposite directions, and neither could have known. **When you may not be alone in the
+  checkout, run `cargo fmt --check` first** — it names the files it would change — and use
+  the writing form only when that list is your own; verify your own files with
+  `rustfmt --check --edition 2024 <file>`. Saying afterwards that someone else's file was
+  dirty does not un-reformat it.
 - Commits: imperative subject, small and focused.
