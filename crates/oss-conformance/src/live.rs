@@ -64,7 +64,7 @@ fn ms(start: Instant) -> u64 {
 // ---- server under test -------------------------------------------------------------
 
 /// Options for [`check_server`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerOptions {
     /// Login name; a random `conformance-xxxx` name if `None`.
     pub name: Option<String>,
@@ -74,6 +74,19 @@ pub struct ServerOptions {
     pub arena: Option<String>,
     /// How long to wait for each answer.
     pub timeout: Duration,
+}
+
+/// Written by hand so the password never reaches a log; every other field
+/// prints as it would from `derive`. See [`oss_proto::wire::Redacted`].
+impl std::fmt::Debug for ServerOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerOptions")
+            .field("name", &self.name)
+            .field("password", &oss_proto::wire::Redacted)
+            .field("arena", &self.arena)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl Default for ServerOptions {

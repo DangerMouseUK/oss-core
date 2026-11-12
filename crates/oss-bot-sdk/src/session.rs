@@ -33,7 +33,7 @@ pub enum Encryption {
 }
 
 /// What the bot logs in as and where it goes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BotConfig {
     /// Player name.
     pub name: String,
@@ -51,6 +51,24 @@ pub struct BotConfig {
     pub encryption: Encryption,
     /// Machine id sent at login.
     pub machine_id: u32,
+}
+
+/// Written by hand so the password never reaches a log; every other field
+/// prints as it would from `derive`. A bot that logs its own config is the
+/// likeliest way for this one to escape. See [`oss_proto::wire::Redacted`].
+impl core::fmt::Debug for BotConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BotConfig")
+            .field("name", &self.name)
+            .field("password", &oss_proto::wire::Redacted)
+            .field("arena", &self.arena)
+            .field("ship", &self.ship)
+            .field("create_account", &self.create_account)
+            .field("download_map", &self.download_map)
+            .field("encryption", &self.encryption)
+            .field("machine_id", &self.machine_id)
+            .finish()
+    }
 }
 
 impl BotConfig {

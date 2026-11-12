@@ -191,6 +191,27 @@ impl<const N: usize> fmt::Debug for FixedStr<N> {
     }
 }
 
+/// Stands in for a credential in `Debug` output.
+///
+/// Passwords travel in ordinary [`FixedStr`] and [`alloc::string::String`]
+/// fields, whose own `Debug` prints what they hold — which is right for names,
+/// arenas, filenames and everything else they carry. Being a secret is a
+/// property of the *field*, not of the type, so the types that own one write
+/// their `Debug` by hand and pass this instead of the value. A password kept
+/// out of a capture but printed into a log has only moved.
+///
+/// ```
+/// # use oss_proto::wire::Redacted;
+/// assert_eq!(format!("{:?}", Redacted), "<redacted>");
+/// ```
+pub struct Redacted;
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
