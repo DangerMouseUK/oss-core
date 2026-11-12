@@ -6,7 +6,7 @@ The suite lets any implementation of the SubSpace/Continuum protocol show that i
 
 | Part | Command | What it checks |
 |---|---|---|
-| Vectors | `oss-conformance vectors -- <your adapter>` | 3,715 offline checks from published test vectors |
+| Vectors | `oss-conformance vectors -- <your adapter>` | 3,761 offline checks from published test vectors |
 | Live server | `oss-conformance server HOST:PORT` | a running server, with the suite acting as a client |
 | Live directory | `oss-conformance directory --bind ADDR` | a zone's directory registration, with the suite acting as a directory server |
 | Live billing | `oss-conformance biller --bind ADDR [--zone HOST:PORT]` | a zone's SSC billing client, with the suite acting as the billing server |
@@ -175,7 +175,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 
 | Implementation | Vectors | Live |
 |---|---|---|
-| oss-core (reference adapter, in process and as a child process) | 3,715 pass | — |
+| oss-core (reference adapter, in process and as a child process) | 3,761 pass | — |
 | `oss-bot-sdk` (`examples/greeter.rs`) as a client | — | 15 pass |
 | A zone built on `oss-net` (in the suite's tests) | — | all pass |
 | `oss-server` (bundled default zone, 2026-11-08) | — | 28 pass, 1 skipped: it sent no security request within 2 s. Directory registration not yet implemented |
