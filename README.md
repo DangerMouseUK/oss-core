@@ -17,7 +17,7 @@ wrote.
 | Repository | What it is | Licence |
 |---|---|---|
 | **oss-core** — you are here | The shared half: packets, transport, map and settings formats, the physics simulation, and a conformance suite anyone can run | MIT |
-| [oss-server](https://github.com/DangerMouseUK/oss-server) | The zone server. Runs an existing ASSS zone directory unchanged, and accepts Continuum, VIE and Open SubSpace clients on one port | GPL-2.0-or-later |
+| [oss-server](https://github.com/DangerMouseUK/oss-server) | The zone server. Runs an existing ASSS zone directory unchanged, and serves VIE and OpenSec clients on one port | GPL-2.0-or-later |
 | [oss-client](https://github.com/DangerMouseUK/oss-client) | The game client, plus a headless bot on the same session code | GPL-2.0-or-later |
 
 `oss-core` has no game loop and no window. It is what you reach for when you are writing a
@@ -35,6 +35,10 @@ projects that have nothing else to do with this one.
 | `oss-sim` | Deterministic 100 Hz integer simulation of ships, weapons and collision: client prediction and the server's plausibility checks, from one body of code ([`SETTINGS.md`](crates/oss-sim/SETTINGS.md)) |
 | `oss-bot-sdk` | Zone bots in a few lines: login, arena, players, chat, kills |
 | `oss-conformance` | Conformance suite for any implementation: 3,761 vector checks through a language-neutral adapter, plus live client and server checks |
+
+`oss-proto`, `oss-formats` and `oss-net` also build for `wasm32-unknown-unknown`, with a
+WebSocket relay path for a client running in a browser (`oss-net`'s `browser` example). CI
+builds all of it, with and without default features, on every push.
 
 ## Why you would trust it
 
@@ -165,7 +169,8 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-`fuzz/` is excluded from the workspace and built separately (see `fuzz/README.md`).
+The minimum supported Rust version is 1.88, checked by CI. `fuzz/` is excluded from the
+workspace and built separately (see `fuzz/README.md`).
 
 [oss-server](https://github.com/DangerMouseUK/oss-server) and
 [oss-client](https://github.com/DangerMouseUK/oss-client) expect this repository as a
