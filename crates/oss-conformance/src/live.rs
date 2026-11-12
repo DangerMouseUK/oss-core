@@ -174,6 +174,36 @@ fn is_ack(p: &[u8], want: u32) -> bool {
     matches!(CorePacket::decode(p), Ok(CorePacket::Ack { seq }) if seq == want)
 }
 
+/// Repeats `attempt` until one reports success, or until `timeout` passes.
+///
+/// Checks whose stimulus is an *unreliable* packet need this: the server has
+/// nothing to retransmit, so a single datagram lost on the way out or back --
+/// which a loaded machine does -- would fail a check about what the server
+/// does with what it receives. The reliable checks nearby do not need it,
+/// because the reliable layer retries for them.
+///
+/// Each attempt is judged on its own and nothing carries over between them,
+/// so a check that wants two answers still has to get both out of one
+/// stimulus. `attempt` is given its number so it can vary the packet it
+/// sends and keep a late answer to an earlier attempt from being counted
+/// for a later one.
+fn until_answered(
+    timeout: Duration,
+    mut attempt: impl FnMut(u32) -> io::Result<bool>,
+) -> io::Result<bool> {
+    let start = Instant::now();
+    let mut n = 0;
+    loop {
+        if attempt(n)? {
+            return Ok(true);
+        }
+        if start.elapsed() >= timeout {
+            return Ok(false);
+        }
+        n += 1;
+    }
+}
+
 /// Checks a server at `addr`: transport behaviour with hand-built datagrams,
 /// then login, arena entry, map download and the security exchange.
 pub fn check_server(addr: SocketAddr, opts: &ServerOptions) -> io::Result<Report> {
@@ -360,24 +390,34 @@ fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> i
         "the duplicate's payload was handled again",
     );
 
-    // A cluster of two sync requests: both answered.
-    let mut cl = vec![0, 0x0E];
-    for t in [3333u32, 4444] {
-        let s = sync_request(t);
-        cl.push(s.len() as u8);
-        cl.extend_from_slice(&s);
-    }
-    raw.send(cl)?;
-    let (mut a, mut b) = (false, false);
-    raw.collect(opts.timeout, |p| {
-        a |= is_sync_response(p, 3333);
-        b |= is_sync_response(p, 4444);
-        a && b
-    });
+    // A cluster of two sync requests: both answered, and both out of the same
+    // cluster. Sync requests are unreliable, so the cluster is resent until one
+    // attempt is answered in full; the times move with the attempt number so a
+    // late answer to an earlier cluster cannot be read as this one's, and `a`
+    // and `b` are judged per attempt so answering one packet per cluster never
+    // adds up to a pass.
+    let attempt_timeout = opts.timeout.min(Duration::from_secs(1));
+    let both = until_answered(opts.timeout, |n| {
+        let (first, second) = (3333 + n, 4444 + n);
+        let mut cl = vec![0, 0x0E];
+        for t in [first, second] {
+            let s = sync_request(t);
+            cl.push(s.len() as u8);
+            cl.extend_from_slice(&s);
+        }
+        raw.send(cl)?;
+        let (mut a, mut b) = (false, false);
+        raw.collect(attempt_timeout, |p| {
+            a |= is_sync_response(p, first);
+            b |= is_sync_response(p, second);
+            a && b
+        });
+        Ok(a && b)
+    })?;
     r.check(
         G,
         "cluster",
-        a && b,
+        both,
         "both packets in a 00 0E cluster must be handled",
     );
 
