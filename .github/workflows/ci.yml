@@ -69,10 +69,11 @@ jobs:
   # Two runs, because the fan-out decides the volume and the default is not
   # the realistic one. --fanout 30 is the long-standing smoke test (about 3%
   # on a desktop CPU); --fanout 82 is what ASSS's relay rules actually produce
-  # for 500 players spread over a whole map (about 5%), measured, not assumed.
-  # A crowded arena reaches --fanout 350, which costs about 21% of a core and
-  # so does not fit the budget today; it is deliberately not gated here rather
-  # than gated at a threshold it would fail. docs/performance.md says so.
+  # for 500 players spread over a whole map (5.3%), measured, not assumed.
+  # A crowded arena reaches --fanout 350, which costs about 20% of a core --
+  # the whole budget, for the transport alone -- and so does not fit once game
+  # logic is added; it is deliberately not gated here rather than gated at a
+  # threshold it would fail. docs/performance.md says so.
   soak:
     runs-on: ubuntu-latest
     steps:
