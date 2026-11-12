@@ -791,10 +791,10 @@ fn pages() -> Vec<Page> {
             "login (SubSpace)",
             "c2s::Login",
             "101",
-            "0|1|u8|type|`0x09`\n1|1|u8|flags|1 = new user\n2|32|char[32]|name|\n34|32|char[32]|password|\n66|4|u32|machine_id|\n70|1|u8|connect_type|4 typical\n71|2|i16|timezone_bias|Minutes\n73|2|u16|unknown1|Unknown\n75|2|u16|client_version|134 for SubSpace\n77|4|i32|field444|Normally 444; one server reads bytes 79–80 as feature flags\n81|4|i32|field555|Normally 555\n85|4|u32|permission_id|\n89|12|bytes|reserved|One server reads redirect data here",
+            "0|1|u8|type|`0x09`\n1|1|u8|flags|1 = new user\n2|32|char[32]|name|\n34|32|char[32]|password|\n66|4|u32|machine_id|\n70|1|u8|connect_type|4 typical\n71|2|i16|timezone_bias|Minutes\n73|2|u16|unknown1|Unknown\n75|2|u16|client_version|134 for SubSpace\n77|4|i32|field444|Normally 444; one server reads bytes 79–80 as feature flags\n81|4|u32|bound_ip|Client's bound address, host-order dword; 0 for INADDR_ANY\n85|4|u32|permission_id|\n89|4|u32|server_ip|Zone address being dialled, same encoding\n93|2|u16|bound_port|Client's local UDP port\n95|4|u32|redirect_id|From a previous S2C `0x3B`, else 0\n99|1|u8|using_proxy|Non-zero if behind a SOCKS proxy\n100|1|u8|unused|",
             "Servers check the length against the client type negotiated by the encryption handshake.",
             Partly,
-            "Layout from sources; `unknown1`, the upper half of field 444 and the reserved block are kept raw.",
+            "Layout from sources and a capture of a real client; `unknown1` and the upper half of field 444 are kept raw.",
         ),
         manual(
             C2S,

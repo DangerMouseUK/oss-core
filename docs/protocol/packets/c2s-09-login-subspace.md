@@ -25,9 +25,13 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | 73 | 2 | u16 | unknown1 | Unknown |
 | 75 | 2 | u16 | client_version | 134 for SubSpace |
 | 77 | 4 | i32 | field444 | Normally 444; one server reads bytes 79–80 as feature flags |
-| 81 | 4 | i32 | field555 | Normally 555 |
+| 81 | 4 | u32 | bound_ip | Client's bound address, host-order dword; 0 for INADDR_ANY |
 | 85 | 4 | u32 | permission_id |  |
-| 89 | 12 | bytes | reserved | One server reads redirect data here |
+| 89 | 4 | u32 | server_ip | Zone address being dialled, same encoding |
+| 93 | 2 | u16 | bound_port | Client's local UDP port |
+| 95 | 4 | u32 | redirect_id | From a previous S2C `0x3B`, else 0 |
+| 99 | 1 | u8 | using_proxy | Non-zero if behind a SOCKS proxy |
+| 100 | 1 | u8 | unused |  |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
@@ -37,4 +41,4 @@ Servers check the length against the client type negotiated by the encryption ha
 
 ## Evidence
 
-**Partly inferred.** Layout from sources; `unknown1`, the upper half of field 444 and the reserved block are kept raw. See [verification.md](../verification.md) for the levels.
+**Partly inferred.** Layout from sources and a capture of a real client; `unknown1` and the upper half of field 444 are kept raw. See [verification.md](../verification.md) for the levels.

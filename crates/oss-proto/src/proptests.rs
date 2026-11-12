@@ -364,14 +364,16 @@ fn login(continuum: bool) -> impl Strategy<Value = Login> {
     (
         (any::<u8>(), fixed::<32>(), fixed::<32>(), any::<u32>()),
         (any::<u8>(), any::<i16>(), any::<u16>(), any::<u16>()),
-        (any::<i32>(), any::<i32>(), any::<u32>(), w::<[u8; 12]>()),
+        (any::<i32>(), any::<u32>(), any::<u32>(), any::<u32>()),
+        (any::<u16>(), any::<u32>(), any::<u8>(), any::<u8>()),
         w::<[u8; 64]>(),
     )
         .prop_map(
             move |(
                 (flags, name, password, machine_id),
                 (connect_type, timezone_bias, unknown1, client_version),
-                (field444, field555, permission_id, reserved),
+                (field444, bound_ip, permission_id, server_ip),
+                (bound_port, redirect_id, using_proxy, unused),
                 cont,
             )| Login {
                 kind: if continuum {
@@ -388,9 +390,13 @@ fn login(continuum: bool) -> impl Strategy<Value = Login> {
                 unknown1,
                 client_version,
                 field444,
-                field555,
+                bound_ip,
                 permission_id,
-                reserved,
+                server_ip,
+                bound_port,
+                redirect_id,
+                using_proxy,
+                unused,
                 cont_id: continuum.then_some(cont),
             },
         )

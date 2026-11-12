@@ -327,13 +327,34 @@ pub struct Login {
     /// Normally 444. Some servers read its upper half (bytes 79-80) as client
     /// feature flags ([`client_features`]).
     pub field444: i32,
-    /// Normally 555.
-    pub field555: i32,
-    /// Permission id.
+    /// The address the client's socket is bound to, as a **host-order** dword —
+    /// `127.0.0.1` is the bytes `01 00 00 7F`. Zero for the usual
+    /// `INADDR_ANY` bind, which is what a real client sends.
+    ///
+    /// Captures of a real Continuum client put 0 here; this field was once
+    /// called `field555` and written as the constant 555, which is not an
+    /// address any client would report.
+    pub bound_ip: u32,
+    /// Permission id. A real client sends 0.
     pub permission_id: u32,
-    /// Reserved; some servers read the connected-to address, port and a login id
-    /// from [`super::s2c::Redirect`] here.
-    pub reserved: [u8; 12],
+    /// The zone address the client is sending to, in the same host-order
+    /// encoding as [`Login::bound_ip`]. A capture against
+    /// `207.148.16.165` carries `0xCF9410A5`.
+    ///
+    /// Some servers read this to classify the connection: zero together with a
+    /// zero [`Login::bound_port`] is taken to mean a SOCKS5 proxy, `127.x.x.x`
+    /// a local proxy, and anything that is not the server's own listen address
+    /// a custom proxy.
+    pub server_ip: u32,
+    /// The client's local UDP port. Some servers compare it with the source
+    /// port of the datagram to detect NAT.
+    pub bound_port: u16,
+    /// Login id from a previous [`super::s2c::Redirect`], else 0.
+    pub redirect_id: u32,
+    /// Non-zero if the client is going through a SOCKS proxy.
+    pub using_proxy: u8,
+    /// Unused; a real client sends 0.
+    pub unused: u8,
     /// Continuum only: opaque client id passed to the billing server.
     pub cont_id: Option<[u8; 64]>,
 }
@@ -370,9 +391,13 @@ impl fmt::Debug for Login {
             .field("unknown1", &self.unknown1)
             .field("client_version", &self.client_version)
             .field("field444", &self.field444)
-            .field("field555", &self.field555)
+            .field("bound_ip", &self.bound_ip)
             .field("permission_id", &self.permission_id)
-            .field("reserved", &self.reserved)
+            .field("server_ip", &self.server_ip)
+            .field("bound_port", &self.bound_port)
+            .field("redirect_id", &self.redirect_id)
+            .field("using_proxy", &self.using_proxy)
+            .field("unused", &self.unused)
             .field("cont_id", &self.cont_id)
             .finish()
     }
@@ -412,9 +437,13 @@ impl Login {
             unknown1: r.u16()?,
             client_version: r.u16()?,
             field444: r.i32()?,
-            field555: r.i32()?,
+            bound_ip: r.u32()?,
             permission_id: r.u32()?,
-            reserved: r.array()?,
+            server_ip: r.u32()?,
+            bound_port: r.u16()?,
+            redirect_id: r.u32()?,
+            using_proxy: r.u8()?,
+            unused: r.u8()?,
             cont_id: if r.remaining() >= 64 {
                 Some(r.array()?)
             } else {
@@ -435,9 +464,13 @@ impl Login {
         out.put_u16(self.unknown1);
         out.put_u16(self.client_version);
         out.put_i32(self.field444);
-        out.put_i32(self.field555);
+        out.put_u32(self.bound_ip);
         out.put_u32(self.permission_id);
-        out.put_bytes(&self.reserved);
+        out.put_u32(self.server_ip);
+        out.put_u16(self.bound_port);
+        out.put_u32(self.redirect_id);
+        out.put_u8(self.using_proxy);
+        out.put_u8(self.unused);
         if let Some(c) = &self.cont_id {
             out.put_bytes(c);
         }
@@ -457,9 +490,13 @@ impl Default for Login {
             unknown1: 0,
             client_version: 134,
             field444: 444,
-            field555: 555,
+            bound_ip: 0,
             permission_id: 0,
-            reserved: [0; 12],
+            server_ip: 0,
+            bound_port: 0,
+            redirect_id: 0,
+            using_proxy: 0,
+            unused: 0,
             cont_id: None,
         }
     }
