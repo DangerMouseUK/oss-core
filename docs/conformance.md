@@ -103,7 +103,7 @@ The suite connects to the server as a SubSpace (VIE) client.
 | `duplicate-reliable-acked` | sending the same reliable again is acknowledged again |
 | `duplicate-reliable-ignored` | and its payload is not handled a second time |
 | `cluster` | both packets inside a `00 0E` cluster are handled (the cluster is resent, with fresh times, until one attempt is answered in full) |
-| `reliable-out-of-order-acked`, `reliable-order` | reliables sent as sequence 2 then 1 are both acknowledged, and their payloads are handled in order 1, 2 |
+| `reliable-out-of-order-acked`, `reliable-order` | a pair of reliables sent higher sequence first, 100 ms apart, is both acknowledged, and the payloads are handled in sequence order rather than arrival order (an unacknowledged one is retransmitted, and a pair whose answers went missing is retried with fresh sequence numbers) |
 | `unknown-core-ignored` | `00 0D` and `00 0F` are ignored and the session keeps answering |
 | `disconnect` | after `00 07`, the server ignores the old session |
 

@@ -192,8 +192,10 @@ fn is_ack(p: &[u8], want: u32) -> bool {
 /// Checks whose stimulus is an *unreliable* packet need this: the server has
 /// nothing to retransmit, so a single datagram lost on the way out or back --
 /// which a loaded machine does -- would fail a check about what the server
-/// does with what it receives. The reliable checks nearby do not need it,
-/// because the reliable layer retries for them.
+/// does with what it receives. The reliable checks need it too: the suite
+/// builds its reliables by hand and has no reliable layer of its own, so
+/// nothing retransmits them, and the acknowledgements and core answers that
+/// come back are unreliable in any case.
 ///
 /// Each attempt is judged on its own and nothing carries over between them,
 /// so a check that wants two answers still has to get both out of one
@@ -434,34 +436,72 @@ fn transport_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> i
         "both packets in a 00 0E cluster must be handled",
     );
 
-    // Reliables that arrive out of order are delivered in order: send sequence
-    // 2 before 1; the answer to 1's payload must come first.
+    // Reliables that arrive out of order are delivered in order: each attempt
+    // sends the higher sequence of a pair first and the lower one 100 ms later,
+    // and the answer to the lower one must come back first. The gap is what
+    // gives the check its teeth: a server that handled each reliable as it
+    // arrived would answer in arrival order and show up as [2, 1].
+    //
+    // Nothing here is reliable in the other direction -- the acknowledgements
+    // and the answers are both unreliable -- and the suite's reliables are
+    // hand-built, so nothing retransmits them either. An attempt therefore
+    // resends whichever of its pair is still unacknowledged, as a reliable
+    // sender would; that is also what fills the hole the loss left in the
+    // server's receive window, which everything after it would otherwise queue
+    // behind. Once both are acknowledged the pair is through, so an attempt
+    // that still has no answers starts a *fresh* pair instead of replaying this
+    // one: a duplicate reliable is acknowledged but its payload is not handled
+    // twice, so a replay could never produce the answers again. An attempt that
+    // does see both answers is judged on them there and then -- a wrong order
+    // is a real fault, not something to retry away.
     let reliable = |seq: u32, t: u32| {
         let mut p = vec![0, 3];
         p.extend_from_slice(&seq.to_le_bytes());
         p.extend_from_slice(&sync_request(t));
         p
     };
-    raw.send(reliable(2, 7002))?;
-    std::thread::sleep(Duration::from_millis(100));
-    raw.send(reliable(1, 7001))?;
+    let deadline = Instant::now() + opts.timeout;
+    let mut next_seq = 1;
     let mut order = Vec::new();
-    let (mut ack1, mut ack2) = (false, false);
-    raw.collect(opts.timeout, |p| {
-        ack1 |= is_ack(p, 1);
-        ack2 |= is_ack(p, 2);
-        if is_sync_response(p, 7001) {
-            order.push(1);
+    let mut acked = false;
+    let _ = until_answered(opts.timeout, |n| {
+        let (lo, hi) = (next_seq, next_seq + 1);
+        next_seq += 2;
+        let (low_time, high_time) = (7001 + n * 2, 7002 + n * 2);
+        raw.send(reliable(hi, high_time))?;
+        std::thread::sleep(Duration::from_millis(100));
+        raw.send(reliable(lo, low_time))?;
+        order.clear();
+        let (mut ack_lo, mut ack_hi) = (false, false);
+        loop {
+            let (complete, _) = raw.collect(Duration::from_millis(250), |p| {
+                ack_lo |= is_ack(p, lo);
+                ack_hi |= is_ack(p, hi);
+                if is_sync_response(p, low_time) {
+                    order.push(1);
+                }
+                if is_sync_response(p, high_time) {
+                    order.push(2);
+                }
+                ack_lo && ack_hi && order.len() >= 2
+            });
+            acked = ack_lo && ack_hi;
+            if complete || acked || Instant::now() >= deadline {
+                break;
+            }
+            if !ack_hi {
+                raw.send(reliable(hi, high_time))?;
+            }
+            if !ack_lo {
+                raw.send(reliable(lo, low_time))?;
+            }
         }
-        if is_sync_response(p, 7002) {
-            order.push(2);
-        }
-        ack1 && ack2 && order.len() >= 2
-    });
+        Ok(order.len() >= 2)
+    })?;
     r.check(
         G,
         "reliable-out-of-order-acked",
-        ack1 && ack2,
+        acked,
         "both reliables must be acknowledged",
     );
     r.check(
