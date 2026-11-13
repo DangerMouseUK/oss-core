@@ -242,16 +242,22 @@ const MAX_DEPTH: u32 = 4;
 /// Capacity of pooled buffers: a full datagram plus cipher overhead.
 const BUF_CAPACITY: usize = 576;
 /// Most buffers kept for reuse per connection.
-const POOL_LIMIT: usize = 256;
+pub(crate) const POOL_LIMIT: usize = 256;
 
 /// Free buffers, reused so a busy connection does not allocate per packet.
 #[derive(Debug, Default)]
 pub(crate) struct Pool {
     free: Vec<Vec<u8>>,
+    /// Buffers taken since the last [`Pool::refill_target`]: what one interval
+    /// between top-ups actually asked for.
+    taken: usize,
+    /// Decaying maximum of recent `taken`, which is the top-up target.
+    demand: usize,
 }
 
 impl Pool {
     fn take(&mut self) -> Vec<u8> {
+        self.taken = self.taken.saturating_add(1);
         self.free
             .pop()
             .unwrap_or_else(|| Vec::with_capacity(BUF_CAPACITY))
@@ -274,6 +280,25 @@ impl Pool {
             b.clear();
             self.free.push(b);
         }
+    }
+
+    /// How many buffers to top this pool up to, from the demand recent
+    /// intervals placed on it: a connection the server is pushing a crowded
+    /// arena's traffic into needs one buffer per queued packet, which is a
+    /// fan-out's worth per tick, not a fixed handful.
+    ///
+    /// The target rises to a new peak at once and falls by an eighth each
+    /// interval, so a burst is served without allocating and a connection that
+    /// quietens down gives the buffers back. Call once per top-up: it consumes
+    /// the count.
+    pub(crate) fn refill_target(&mut self, floor: usize, cap: usize) -> usize {
+        let last = std::mem::take(&mut self.taken);
+        self.demand = last.max(self.demand - self.demand / 8);
+        // A quarter of headroom, so an interval slightly busier than the last
+        // does not have to allocate.
+        self.demand
+            .saturating_add(self.demand / 4)
+            .clamp(floor, cap)
     }
 
     /// Moves buffers from `other` until this pool holds `target` (or `other`
