@@ -345,6 +345,14 @@ pub struct Login {
     /// zero [`Login::bound_port`] is taken to mean a SOCKS5 proxy, `127.x.x.x`
     /// a local proxy, and anything that is not the server's own listen address
     /// a custom proxy.
+    ///
+    /// That rule is Subspace Server .NET's, and it is the only documented
+    /// account of these bytes rather than the only behaviour. One live zone,
+    /// measured on 2026-11-12 across six logins that varied the tail, enforces
+    /// this field and [`Login::bound_port`] *each independently* — a zero
+    /// address sent with a real bound port was kicked, and so was a real
+    /// address sent with a zero port, both of which the conjunction above
+    /// would accept. One fork is not every fork, but fill both in truthfully.
     pub server_ip: u32,
     /// The client's local UDP port. Some servers compare it with the source
     /// port of the datagram to detect NAT.
