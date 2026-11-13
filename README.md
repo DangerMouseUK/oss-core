@@ -182,11 +182,11 @@ oss-core, `cargo fmt --all` is correctly scoped to this repository.
 ## What is not here
 
 - **Continuum's own encryption.** Its key expansion is not public, and it is not implemented
-  or reverse-engineered in these repositories; that is a deliberate licensing and community
-  decision, not an omission. `oss-net` exposes `Acceptor` and `Cipher` so a private build can
-  register its own and have the rest of the stack work unchanged — which is how a real
-  Continuum client came to play on oss-server. [docs/protocol/encryption.md](docs/protocol/encryption.md)
-  documents the *shape* of the `00 10`–`00 14` exchange and nothing more.
+  in these repositories. That is deliberate and not an omission. `oss-net` exposes `Acceptor`
+  and `Cipher` so a build that supplies its own can register it and have the rest of the stack
+  work unchanged — which is how a real Continuum client came to play on oss-server.
+  [docs/protocol/encryption.md](docs/protocol/encryption.md) documents the *shape* of the
+  `00 10`–`00 14` exchange and nothing more.
 - **Published crates.** Nothing here is on crates.io yet; use a git dependency or a path to a
   checkout.
 - **A stable API.** Everything is 0.1.x and moves when the evidence says it should; see the
