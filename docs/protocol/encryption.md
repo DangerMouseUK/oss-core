@@ -74,8 +74,8 @@ Read from the 0.40 client's own handler for subtype `0x12`, by running it. No se
 
 - **The client never reads the `00 12`.** Neither its payload nor its length is touched, and there is no length gate: any `00 12` of two bytes or more is answered identically. It therefore carries no seed, and nothing in the reply echoes it.
 - **The reply is 88 bytes**: the two header bytes `00 13`, two zero bytes, a `u32` seed, then twenty `u32` words. Little-endian throughout, like the rest of the protocol.
-***REMOVED***
-***REMOVED***
+- **The seed is the client's own.** It is computed locally, not taken from anything the server sent — which is why nothing in the reply echoes the `00 12`. How the client derives it is not documented here and is not in this repository.
+- **The twenty words come from the key expansion, keyed by that seed.** The expansion itself is not in this repository.
 - **Nothing is re-keyed.** The handler builds the reply from a scratch expander and leaves the connection's own cipher state, including its key words, untouched.
 - `00 13` is client-to-server only: the client's dispatch table sends subtype `0x13` to its unknown-packet arm.
 
