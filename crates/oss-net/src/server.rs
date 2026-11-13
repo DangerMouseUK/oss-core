@@ -9,10 +9,14 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 
 use crate::cipher::Acceptor;
-use crate::connection::{Config, Connection, DisconnectReason, Event, Pool};
+use crate::connection::{Config, Connection, DisconnectReason, Event, POOL_LIMIT, Pool};
 
-/// Buffers a connection is topped up to when the server collects its output.
+/// Fewest buffers a connection is topped up to when the server collects its
+/// output. The actual target follows the connection's own recent demand (see
+/// `Pool::refill_target`); this is the floor an idle one keeps.
 const CONN_REFILL: usize = 16;
+/// Most buffers a connection is topped up to, whatever its demand.
+const CONN_REFILL_MAX: usize = POOL_LIMIT;
 /// Smallest limit of the server's shared buffer pool.
 const SHARED_POOL_MIN: usize = 256;
 /// Shared pool buffers allowed per connection.
@@ -157,9 +161,12 @@ impl<A: Eq + Hash + Clone> Server<A> {
         let Some(conn) = self.conns.get_mut(addr) else {
             return;
         };
-        // Hand recycled buffers back to the connection: a few, so they keep
-        // circulating instead of piling up in idle connections.
-        conn.pool_mut().refill_from(&mut self.pool, CONN_REFILL);
+        // Hand recycled buffers back to the connection, as many as its recent
+        // traffic actually asked for: too few and a crowded arena allocates a
+        // buffer per relayed packet, too many and idle connections hoard them.
+        let p = conn.pool_mut();
+        let target = p.refill_target(CONN_REFILL, CONN_REFILL_MAX);
+        p.refill_from(&mut self.pool, target);
         while let Some(d) = conn.poll_transmit() {
             self.raw_out.push_back((addr.clone(), d));
         }

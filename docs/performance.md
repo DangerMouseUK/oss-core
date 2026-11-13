@@ -108,7 +108,12 @@ So the estimate in oss-server's doc, which multiplied 1.8M packets/s by the fan-
 
 With OpenSec instead of VIE, the same paired-control method gives 8.5% (fan-out 82), 16.0% (210) and 27.5% (350).
 
-**Allocations.** At fan-out 210 and above the server allocates on the hot path again: 5,913/s at 210 and 28,348/s at 350, against 145/s at fan-out 30. That is the same class of problem as the buffer-pool limit described under [Change found by the harness](#change-found-by-the-harness) — one tick at fan-out 350 queues about 17,000 packets, far past the pool's 8-per-connection sizing — and it is not yet fixed. Some of the 20% above is that allocation traffic, so the crowded figure may improve once the pool is sized for it.
+**Allocations.** At fan-out 210 and above the server used to allocate on the hot path again: 5,913/s at 210 and 28,348/s at 350, against 145/s at fan-out 30. **Fixed on 2026-11-13** by making the connection top-up target follow demand (see [Change found by the harness](#change-found-by-the-harness)); the same runs now give 172/s at 210 and 189/s at 350, which is the churn floor.
+
+Two things are worth recording about how that was found, because both were wrong in the obvious direction:
+
+- **It was not the shared pool.** The natural reading — one tick at fan-out 350 queues about 17,000 packets against a shared pool limited to 8 per connection, so 4,000 at 500 players — is not the mechanism. Raising `SHARED_POOL_PER_CONN` from 8 to 32 and then 64 moved the rate from 28,348/s to 27,868/s both times, a 1.7% change. Raising the per-connection top-up from 16 to 64 moved it to 206/s. A probe counting allocations by size and sampling their stacks put 99.8% of them at exactly `BUF_CAPACITY` (576 bytes) and three-quarters of those under `Connection::send_with`, where a relayed position is copied into a buffer the connection no longer has.
+- **The allocations were not costing much CPU.** The guess here used to be that some of the 19.6% was allocation traffic and the figure would improve once the pool was sized for it. It did not: against a fan-out-30 control that matched the earlier run to 0.3%, fan-out 350 came back at 18.88% where the baseline runs gave 20.22–22.83%. That is within what this machine does to a single run, so the honest summary is that removing 28,000 allocations a second changed CPU by less than the noise. The cost it removes is allocator pressure and jitter, not percent of a core.
 
 ### Measuring under load
 
@@ -146,6 +151,19 @@ The first 500-player run showed about 27,700 allocations per second where the ho
 - connections were topped up with only a few buffers, too few for bursts.
 
 The shared pool now scales with the number of connections (8 buffers each), and connections are topped up to 16. Allocations fell to under 150 per second with churn and about 30 without, and CPU dropped by about 10%.
+
+**The second, 2026-11-13: the top-up of 16 was itself a fan-out-30 number.** A connection takes one pooled buffer per packet queued into it and gets them back only when it flushes, so its demand over a tick is the fan-out, not a constant. At 500 players and ASSS's quarter-map fan-out that is about 36 buffers per connection per tick against a top-up of 16, and the shortfall is allocated. Sweeping fan-out puts the knee where that predicts: demand per connection per tick of 3.1 (fan-out 30) costs 146 allocations/s, 11.1 costs 567, 15.5 costs 3,112, and 35.8 costs 28,348.
+
+A bigger constant is the wrong fix, because it is paid by every connection: a flat 64 holds the crowded case at 206/s but takes heap per player from 16.6 KB to 59.4 KB in an *empty* arena, and a flat 128 is worse on both counts (329/s, 98.0 KB). So the target now follows each connection's own recent demand — it rises to a new peak at once and decays by an eighth per top-up, with the old 16 as the floor an idle connection keeps and 256 as the cap. Allocations per second, 500 players, before and after:
+
+| Fan-out | 30 | 82 | 210 | 350 |
+|---|---|---|---|---|
+| Before | 146 | — | 5,913 | 28,348 |
+| After | 146 | 148 | 172 | 189 |
+| Heap per player, before | 16.6 KB | — | 29.2 KB | 35.3 KB |
+| Heap per player, after | 16.6 KB | 21.0 KB | 37.2 KB | 52.6 KB |
+
+An idle arena pays nothing for this and a crowded one pays about 17 KB per player, which is the cost of holding the buffers its own traffic needs. `tests/alloc_free_crowded.rs` guards it: `alloc_free.rs` sends a handful of packets per tick, which fits under any plausible floor, so it could never have caught this.
 
 ## OpenSec
 
