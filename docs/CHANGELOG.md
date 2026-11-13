@@ -13,7 +13,7 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
   Read from the client's own `0x1A` builder: it sends 42 bytes out of a buffer cleared as ten dwords and a word. A server that insists on 46 logs an invalid length, leaves the challenge unanswered and kicks a real 0.40 client a quarter of a minute later, naming the wrong cause.
 
 ### docs (the `00 12` / `00 13` exchange, corrected)
-***REMOVED***
+- `docs/protocol/encryption.md` had `00 12` carrying a `u32` seed and the `00 13` reply at 86 bytes. Read off the 0.40 client: the reply is **88 bytes** (`00 13 00 00`, a seed, twenty `u32` words), the client **never reads the `00 12`** — no payload, no length gate — and the seed is derived locally rather than received, so nothing is echoed and nothing is re-keyed. `00 13` is client-to-server only. No server has been observed to send a `00 12`.
 
 ### oss-proto (billing permits, biller identity, arena name)
 - **Breaking: `s2c::PlayerId.extra: Option<u8>` is now `arena: Option<Vec<u8>>`.**
