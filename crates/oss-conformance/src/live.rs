@@ -946,6 +946,40 @@ impl Zone {
     }
 }
 
+/// What the suite can honestly record for the executable checksum a client
+/// reported in C2S `0x1A`.
+enum ExeChecksum {
+    /// Nothing to compare. The string says why, and is printed beside the skip.
+    Skip(&'static str),
+    /// The client volunteered a value, so compare it with the expected one.
+    Compare,
+}
+
+/// Decides how a reported executable checksum is judged.
+///
+/// Two values carry no claim about the running binary and so are skipped rather
+/// than passed or failed:
+///
+/// - an OpenSec client's, which the protocol leaves client-defined;
+/// - `0`, which is the field's "no executable checksum computed". The original
+///   SubSpace 1.34 client reports it, and `oss-server`'s own check reads a zero
+///   the same way. A suite that printed `PASS` here would be claiming it
+///   compared something it never saw.
+///
+/// Any other value is a client asserting it is a particular build, which is the
+/// one case this check was ever able to catch, so it is still compared.
+fn exe_checksum_verdict(opensec: bool, reported: u32) -> ExeChecksum {
+    if opensec {
+        ExeChecksum::Skip("OpenSec client (exe checksum is client-defined)")
+    } else if reported == 0 {
+        ExeChecksum::Skip(
+            "the client reported 0 (no executable checksum computed, as the original SubSpace 1.34 client does): nothing to compare",
+        )
+    } else {
+        ExeChecksum::Compare
+    }
+}
+
 /// Waits for one client on `sock` and checks it: connection request, login,
 /// acknowledgements, arena entry, map download, position checksums, time sync
 /// and the security checksums.
@@ -1186,22 +1220,17 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
             format!("expected {want:08x}, got {:08x}", s.settings_checksum),
         );
         let want = vie_exe_checksum(key);
-        if opensec {
-            r.skip(
-                G,
-                "security-exe-checksum",
-                "OpenSec client (exe checksum is client-defined)",
-            );
-        } else {
-            r.check(
+        match exe_checksum_verdict(opensec, s.exe_checksum) {
+            ExeChecksum::Skip(why) => r.skip(G, "security-exe-checksum", why),
+            ExeChecksum::Compare => r.check(
                 G,
                 "security-exe-checksum",
                 s.exe_checksum == want,
                 format!(
-                    "expected {want:08x} (the ASSS/nullspace VIE value; a client reporting 0 computes none), got {:08x}",
+                    "expected {want:08x} (the ASSS/nullspace VIE value) or 0 (no checksum computed), got {:08x}",
                     s.exe_checksum
                 ),
-            );
+            ),
         }
         let grid = Level::parse(map).map(|l| l.server_tile_grid().0);
         if s.map_checksum == 0 {
@@ -1721,4 +1750,48 @@ pub fn check_zone_billing(sock: UdpSocket, opts: &BillerOptions) -> io::Result<R
         ),
     }
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExeChecksum, exe_checksum_verdict};
+
+    /// A reported zero is the protocol's "not applicable", so it is a skip: not
+    /// a failure (the original SubSpace 1.34 client reports it) and not a pass
+    /// (nothing was compared).
+    #[test]
+    fn a_reported_zero_is_skipped_with_a_reason() {
+        let ExeChecksum::Skip(why) = exe_checksum_verdict(false, 0) else {
+            panic!("a reported zero must be skipped, not compared");
+        };
+        assert!(
+            why.contains('0') && why.contains("nothing to compare"),
+            "the skip must say why: {why}"
+        );
+    }
+
+    /// The one case this check can catch: a client claiming to be a build it is
+    /// not. Accepting zero must not weaken it.
+    #[test]
+    fn a_non_zero_value_is_still_compared() {
+        assert!(matches!(
+            exe_checksum_verdict(false, 0xaaf3_6798),
+            ExeChecksum::Compare
+        ));
+        assert!(matches!(
+            exe_checksum_verdict(false, 1),
+            ExeChecksum::Compare
+        ));
+    }
+
+    /// An OpenSec client's value is client-defined, whatever it reports.
+    #[test]
+    fn an_opensec_client_is_skipped_either_way() {
+        for reported in [0, 1, 0xaaf3_6798] {
+            let ExeChecksum::Skip(why) = exe_checksum_verdict(true, reported) else {
+                panic!("an OpenSec client must be skipped");
+            };
+            assert!(why.contains("OpenSec"), "the skip must say why: {why}");
+        }
+    }
 }

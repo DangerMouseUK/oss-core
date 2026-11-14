@@ -167,7 +167,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `position`, `position-checksum` | C2S `0x03` updates arrive, all with correct checksums |
 | `security-response` | S2C `0x18` with a key gets C2S `0x1A` |
 | `security-settings-checksum` | correct for the settings packet the suite sent (the reference server's) |
-| `security-exe-checksum` | the ASSS/nullspace VIE exe checksum. Skipped for OpenSec clients. The original SubSpace 1.34 client reports `0` and does not pass this check, although `oss-server` itself reads a zero as "not applicable" |
+| `security-exe-checksum` | the ASSS/nullspace VIE exe checksum. Skipped for OpenSec clients, whose value is client-defined, and skipped when the client reports `0`, which is the protocol's "no executable checksum computed" and what the original SubSpace 1.34 client sends — there is nothing to compare, so the suite asserts nothing rather than printing a pass it did not earn. A wrong non-zero value is still a failure. `oss-server` reads a zero the same way |
 | `security-map-checksum` | correct for the map the suite served (`synth-a-plain.lvl`, a seeded synthetic map). Skipped if the client reports 0 |
 | `time-sync` | the client sends a 14-byte `00 05` time sync request |
 
