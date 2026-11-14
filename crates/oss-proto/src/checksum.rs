@@ -71,14 +71,20 @@ pub fn counts_for_map_checksum(tile: u8) -> bool {
 /// Map checksum for the security response.
 ///
 /// Samples every 31st column and 32nd row, starting at offsets derived from the
-/// key, and adds `key ^ tile` for each counted tile. The client's own loop
+/// key, and adds `key ^ tile` for each counted tile. Continuum's own loop
 /// divides the key **unsigned**, so the start offsets are always
 /// in `0..32`; `tile(x, y)` is therefore always called with `0 <= x, y < 1024`.
 /// ASSS and Subspace Server .NET divide a signed copy instead, which for a key
-/// with the top bit set samples different columns (`2^32 % 31 == 4`). This is
-/// one of the places the client wins: a server that follows the reference
-/// implementations computes a checksum no real client can match, for about half
-/// of all keys. Big map objects must already be expanded into the grid (see
+/// with the top bit set samples different columns (`2^32 % 31 == 4`).
+///
+/// How far that divergence goes is not known from here. It rests on how
+/// Continuum behaves, and nothing has been established about the 1998 VIE
+/// client, which was measured stopping dead on such a key rather than
+/// answering it. The case also no longer arises in this project: a checksum
+/// key is a 31-bit number and `oss-server` draws only from `1..=0x7FFF_FFFF`,
+/// so the two readings agree on every key it sends.
+///
+/// Big map objects must already be expanded into the grid (see
 /// `oss_formats::Level::server_tile_grid`).
 pub fn map_checksum(key: u32, mut tile: impl FnMut(i32, i32) -> u8) -> u32 {
     let mut sum = key;
