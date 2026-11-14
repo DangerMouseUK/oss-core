@@ -218,11 +218,19 @@ Code: MIT (see [`LICENSE`](LICENSE)). Documentation in `docs/`:
 
 The MIT/GPL split across the three repositories is deliberate. `oss-core` is MIT so that
 anyone's bot, tool or alternative client can build on it whatever licence they use;
-`oss-server` and `oss-client` are GPL-2.0-or-later because they follow ASSS, whose behaviour
-they reproduce and whose GPL source may be ported into them.
+`oss-server` and `oss-client` are GPL-2.0-or-later so that the playable game and the server
+behind it stay open, and so does anything built from them.
 
-The test vectors are data: inputs and outputs recorded from reference implementations, some
-of which are GPL programs; each file's header says which.
+**No ASSS source is in this repository, and the project's own rules keep it that way.** ASSS
+is a separate GPL implementation of the same zone server, written in C. This is a fresh
+implementation in Rust: compatible with ASSS, not forked from it and not ported from it.
+What ASSS gave this project is behaviour to match and output to check against.
+
+That output is here, as data rather than code. Fifteen test-vector files — seven under
+`crates/oss-conformance/vectors/` and eight under `crates/*/tests/vectors/` — are transcripts
+recorded from ASSS 1.4.4 modules compiled unmodified, and each one's header names the ASSS
+source file it was produced from. The other vectors in those directories are this project's
+own or come from MIT sources, and say so in the same way.
 `crates/oss-formats/tests/fixtures/smallmap.lvl`, the reference server's GPL sample map, is
 used by this repository's tests only and is left out of the published crates.
 
