@@ -42,8 +42,8 @@ Everything in these pages is implemented in oss-core and covered by round-trip t
 | Map checksum | **Vectors** | `smallmap.lvl` and 4 synthetic maps, 165 checksums, including big objects across the map edge and negative keys |
 | Map file CRC-32 in S2C `0x29`, and the `size` field | **Vectors** and observed | The CRC-32 matches the reference server's vectors. The original server advertised the same CRC-32 for the same map to a real client. Its `size` was the length of the whole `0x2A` packet that followed, not the file size |
 | Map checksum for keys ≥ `0x80000000` | **Vectors** for ASSS | ASSS wraps coordinates mod 1024. Whether the Continuum client does the same is **unconfirmed** |
-| VIE exe checksum | **Vectors** | 32 keys (nullspace) |
-| `map_crc32` (Continuum's extra map CRC in C2S `0x1A`) | Partly inferred | From a single source. Build 0.40 does not send it at all — its response is 42 bytes, read from the client's own builder — and no build that does send it has been checked here |
+| VIE exe checksum (the keyed value a client sends in C2S `0x1A`) | **Vectors**, but see note | 32 keys (nullspace). Our routine agrees with nullspace's byte for byte, and ASSS, subgame and MervBot all expect or compute the same value. What no vector establishes is that any original VIE client ever emits it: the one client that has been measured — SubSpace 1.34, 1998, on 2026-11-13 — reports `0` and computes nothing, so whether a VIE client ever reported this value is open. Not to be confused with the login `exechecksum` `0xF1429CE8`, the CRC-32 of the 1.34 executable that the server sends *to* the client: that one is confirmed against a real client, which accepts it and offers an update when it disagrees |
+| `map_crc32` (Continuum's extra map CRC in C2S `0x1A`) | **Observed** and reproduced | Present at offset 42 in every captured Continuum 0.40 response: six carry one stable non-zero CRC for a single arena map, and the response captured with no map loaded carries zero. `map_crc32` over that arena's own map file reproduces the captured value exactly (`0x7ed31d55`; built and run 2026-11-14). Build 0.38 does not send it at all — its response is 42 bytes |
 | Game RNG (`VieRng`: prize and door seeds) | Sources | Park-Miller with the client's +123 step; agrees with the reference server and nullspace. Not checked against a running client |
 
 ## Settings packet ([settings.md](settings.md))
@@ -73,7 +73,7 @@ All S2C and C2S packets round-trip in oss-core's tests and in the conformance ve
 | C2S `0x01`, `0x02`, `0x05`–`0x08`, `0x0A`–`0x10`, `0x13`–`0x16`, `0x18`, `0x19`, `0x1C`–`0x21`, `0x32` | Sources | Some of these are also live (`0x01`, `0x03`, `0x0C`) |
 | C2S `0x09`/`0x24` login | Partly inferred | `unknown1`, the upper half of field 444 (client feature flags in one server), and the 12 reserved bytes (redirect data in one server) are kept raw |
 | C2S `0x17` registration | Partly inferred | Layout from sources; the 13 hardware strings are free text whose meaning varies between clients |
-| C2S `0x1A` security response | **Vectors** for the checksums, Sources for the layout | The Continuum timer drift is confirmed by build 0.40's own response builder, which sends it and stops there, for 42 bytes. The map CRC-32 that later builds append is still from a single source |
+| C2S `0x1A` security response | **Vectors** for the checksums, Sources for the layout | Continuum 0.38 sends the timer drift and stops there, for 42 bytes. Build 0.40 appends the map CRC-32 at offset 42, for 46 — the length of every captured response from a real 0.40 client |
 | C2S `0x1B` security violation | Partly inferred | The trailing message is optional and its contents are not specified |
 | Voice (S2C `0x0C`, C2S `0x0E`) | Partly inferred | The compressed WAV payload is opaque here |
 

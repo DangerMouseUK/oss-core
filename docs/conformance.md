@@ -49,7 +49,7 @@ A minimal adapter can therefore answer `unsupported` to everything and add comma
 | `vie.server_key <client key>` | the key the server answers with in `00 02` | reference server, edge cases included |
 | `vie.encrypt <server key> <plaintext>` | ciphertext | 768 packets, reference server |
 | `vie.decrypt <server key> <ciphertext>` | plaintext | 768 packets, reference server |
-| `checksum.exe <key>` | VIE (SubSpace 1.34) exe checksum | 32 keys |
+| `checksum.exe <key>` | the ASSS/nullspace VIE exe checksum | 32 keys |
 | `checksum.c2s_position_valid <packet>` | `yes` or `no` | 48 C2S `0x03` packets, reference server |
 | `checksum.s2c_weapon <packet>` | the correct checksum byte (offset 12) | 40 S2C `0x05` packets |
 | `checksum.settings <key> <settings packet>` | settings checksum | 2 packets × 7 keys, reference server |
@@ -167,7 +167,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `position`, `position-checksum` | C2S `0x03` updates arrive, all with correct checksums |
 | `security-response` | S2C `0x18` with a key gets C2S `0x1A` |
 | `security-settings-checksum` | correct for the settings packet the suite sent (the reference server's) |
-| `security-exe-checksum` | the SubSpace 1.34 value. Skipped for OpenSec clients |
+| `security-exe-checksum` | the ASSS/nullspace VIE exe checksum. Skipped for OpenSec clients. The original SubSpace 1.34 client reports `0` and does not pass this check, although `oss-server` itself reads a zero as "not applicable" |
 | `security-map-checksum` | correct for the map the suite served (`synth-a-plain.lvl`, a seeded synthetic map). Skipped if the client reports 0 |
 | `time-sync` | the client sends a 14-byte `00 05` time sync request |
 

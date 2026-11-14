@@ -87,7 +87,7 @@ S2C `0x18` (`s2c::Security`) carries the prize and door seeds for `oss_proto::Vi
 
 - `settings_checksum(key, raw_settings_bytes)`;
 - `map_checksum(key, |x, y| grid.get(x, y))`;
-- `vie_exe_checksum(key)`: what a SubSpace 1.34 client reports.
+- `vie_exe_checksum(key)`: the value ASSS and subgame **expect** from VIE clients, and what a bot presenting itself as one should send. Derived from nullspace. **The original SubSpace 1.34 client does not send it — it reports `0`** (measured 2026-11-13); a server should treat a zero here as "not applicable" rather than as a mismatch. See [verification.md](protocol/verification.md).
 
 All three are in `oss_proto::checksum`. Wrong values get you kicked from zones that check.
 

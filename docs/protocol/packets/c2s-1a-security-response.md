@@ -39,8 +39,8 @@ Integers are little-endian. `n` is a variable length; `i` counts repeated entrie
 
 The checksum algorithms are in [checksums.md](../checksums.md).
 
-Continuum always sends the timer drift. Build 0.40 stops there, for 42 bytes; later builds append the map CRC-32, for 46. A server must accept both lengths, and must not read an absent CRC as a zero one.
+Continuum always sends the timer drift. Build 0.38 stops there, for 42 bytes; 0.40 appends the map CRC-32, for 46. A server must accept both lengths, and must not read an absent CRC as a zero one.
 
 ## Evidence
 
-**Vectors.** The settings, map and exe checksums it carries are vector-verified (`clientset-*.txt`, `map-checksum-*.txt`, `vie-exe-checksum.txt`) and checked live by the conformance suite; the Continuum fields come from a single source. The 42-byte form is read from build 0.40's own response builder, which ends by sending 42 bytes out of a buffer it cleared as ten dwords and a word. See [verification.md](../verification.md) for the levels.
+**Vectors.** The settings and map checksums it carries are vector-verified (`clientset-*.txt`, `map-checksum-*.txt`) and checked live by the conformance suite, and both were correct and key-dependent in a real VIE client's own responses. The exe checksum's vector (`vie-exe-checksum.txt`) is nullspace's, and that field is zero in every response a genuine VIE 1.34 client has been observed to send. Every captured response from a genuine Continuum 0.40 client is 46 bytes, with the map CRC-32 at offset 42; build 0.38 stops after the timer drift, for 42. See [verification.md](../verification.md) for the levels.

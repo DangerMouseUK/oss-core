@@ -786,7 +786,7 @@ pub struct SecurityResponse {
     /// Slow frame detected.
     pub slow_frame: u8,
     /// Continuum only: the timer drift, and [`crate::checksum::map_crc32`] when
-    /// the build sends one. Continuum 0.40 sends the drift alone (42 bytes);
+    /// the build sends one. Continuum 0.38 sends the drift alone (42 bytes);
     /// later builds append the CRC (46). A `None` CRC means the client did not
     /// report one, not that it reported zero.
     pub continuum: Option<(i16, Option<u32>)>,
@@ -796,7 +796,7 @@ impl SecurityResponse {
     /// SubSpace length: no timer drift and no map CRC-32.
     pub const VIE_LEN: usize = 40;
     /// Continuum length with the timer drift and no map CRC-32, which is what
-    /// build 0.40 sends.
+    /// build 0.38 sends.
     pub const CONT_LEN: usize = 42;
     /// Continuum length with the timer drift and the map CRC-32, which later
     /// builds send.
@@ -805,7 +805,7 @@ impl SecurityResponse {
     /// Whether `len` is a length a Continuum client is known to send.
     ///
     /// Servers that length-check before decoding must accept both forms: a
-    /// 0.40 client sends [`Self::CONT_LEN`], a later one
+    /// 0.38 client sends [`Self::CONT_LEN`], a 0.40 one
     /// [`Self::CONT_CRC_LEN`].
     pub const fn is_continuum_len(len: usize) -> bool {
         len == Self::CONT_LEN || len == Self::CONT_CRC_LEN

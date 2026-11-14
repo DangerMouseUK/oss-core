@@ -23,7 +23,7 @@ When S2C `0x18` carries a non-zero key, the client answers C2S `0x1A` with the f
   - The result is `sum`.
   - Vectors: `crates/oss-formats/tests/vectors/map-checksum-synthetic.txt` (generated maps) and the `smallmap.lvl` entries of `map-checksum.txt`, also in the conformance suite. The other real maps in `map-checksum.txt` are not in the repository.
 - **Map CRC (Continuum only).** A CRC over the dense 1024 × 1024 tile array in row-major order, skipping every tile that is not 1–160 or 171. It uses the CRC-32 table, starts at `0xFFFFFFFF` and has no final inversion.
-- **Exe checksum (SubSpace clients).** A fixed function of the key: eight groups of constants, each combined by alternately adding `(constant OR key)` and XORing `(constant XOR key)`, summed with a final constant. The implementation and test vectors are in `oss-proto::checksum::vie_exe_checksum`. Continuum clients report a checksum of their own executable instead.
+- **Exe checksum (the value VIE servers expect).** A fixed function of the key: eight groups of constants, each combined by alternately adding `(constant OR key)` and XORing `(constant XOR key)`, summed with a final constant. The implementation and test vectors are in `oss-proto::checksum::vie_exe_checksum`. The original SubSpace 1.34 client reports zero here and computes nothing (measured 2026-11-13); servers should read a zero as "not applicable". Continuum clients report a checksum of their own executable instead.
 
 ## Game RNG
 

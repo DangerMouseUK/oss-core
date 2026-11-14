@@ -71,7 +71,8 @@ pub fn counts_for_map_checksum(tile: u8) -> bool {
 /// Map checksum for the security response.
 ///
 /// Samples every 31st column and 32nd row, starting at offsets derived from the
-/// key, and adds `key ^ tile` for each counted tile. The client's loop divides the key **unsigned**, so the start offsets are always
+/// key, and adds `key ^ tile` for each counted tile. The client's own loop
+/// divides the key **unsigned**, so the start offsets are always
 /// in `0..32`; `tile(x, y)` is therefore always called with `0 <= x, y < 1024`.
 /// ASSS and Subspace Server .NET divide a signed copy instead, which for a key
 /// with the top bit set samples different columns (`2^32 % 31 == 4`). This is
@@ -177,7 +178,13 @@ fn vie_group(key: u32, (start, steps): Group) -> u32 {
     })
 }
 
-/// The executable checksum a VIE (SubSpace 1.34/1.35) client reports for `key`.
+/// The executable checksum ASSS and subgame expect from VIE clients for `key`,
+/// and what a bot presenting itself as a VIE client sends.
+///
+/// Transcribed from nullspace. The original SubSpace 1.34 client does not
+/// report it: it answers C2S `0x1A` with zero and computes nothing (measured
+/// 2026-11-13), so a server should read a zero here as "not applicable"
+/// rather than as a mismatch. 1.35 is untested in both directions.
 pub fn vie_exe_checksum(key: u32) -> u32 {
     let mut csum = VIE_GROUPS
         .iter()

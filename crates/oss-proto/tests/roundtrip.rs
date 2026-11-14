@@ -517,7 +517,7 @@ fn c2s_samples() -> Vec<C2SPacket> {
             ..Default::default()
         }
         .into(),
-        // Continuum 0.40: the timer drift and no map CRC-32 (42 bytes).
+        // Continuum 0.38: the timer drift and no map CRC-32 (42 bytes).
         c2s::SecurityResponse {
             continuum: Some((-2, None)),
             ..Default::default()
@@ -675,7 +675,7 @@ fn length_dependent_forms() {
     // List packets reject partial entries.
     assert!(S2CPacket::decode(&[0x22, 1]).is_err());
     assert!(S2CPacket::decode(&[0x35]).is_err());
-    // 0x1A: a Continuum response is 42 bytes (drift only, build 0.40) or 46
+    // 0x1A: a Continuum response is 42 bytes (drift only, build 0.38) or 46
     // (drift and map CRC-32). A missing CRC must decode as absent, not as zero.
     use oss_proto::Packet as _;
     let cont = |n: usize| match C2SPacket::decode(&{

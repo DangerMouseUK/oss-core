@@ -4,13 +4,13 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
-### oss-proto (the Continuum security response is 42 bytes in build 0.40)
-- **Breaking: `SecurityResponse.continuum` is now `Option<(i16, Option<u32>)>`.** The map CRC-32 is optional on its own, because Continuum 0.40 sends the timer drift and stops there. A `None` CRC means the client reported none, which is not the same as reporting zero: a server must not compare it against the arena's map CRC.
-- **Breaking: `SecurityResponse::CONT_LEN` is now 42**, the length build 0.40 sends — it was 46. The 46-byte form, with the map CRC, is the new `SecurityResponse::CONT_CRC_LEN`. A length check written as `len != CONT_LEN` still compiles and now rejects the opposite form, so every such check needs revisiting.
+### oss-proto (the Continuum security response is 42 bytes in build 0.38, 46 in 0.40)
+- **Breaking: `SecurityResponse.continuum` is now `Option<(i16, Option<u32>)>`.** The map CRC-32 is optional on its own, because Continuum 0.38 sends the timer drift and stops there. A `None` CRC means the client reported none, which is not the same as reporting zero: a server must not compare it against the arena's map CRC.
+- **Breaking: `SecurityResponse::CONT_LEN` is now 42**, the length build 0.38 sends — it was 46, which is what 0.40 sends. The 46-byte form, with the map CRC, is the new `SecurityResponse::CONT_CRC_LEN`. A length check written as `len != CONT_LEN` still compiles and now rejects the opposite form, so every such check needs revisiting.
 - **New `SecurityResponse::is_continuum_len(len)`**, true for both, for servers that length-check before decoding.
 - `decode` accepts 40, 42 and 46 bytes; `encode` writes the CRC only when there is one.
 
-  Read from the client's own `0x1A` builder: it sends 42 bytes out of a buffer cleared as ten dwords and a word. A server that insists on 46 logs an invalid length, leaves the challenge unanswered and kicks a real 0.40 client a quarter of a minute later, naming the wrong cause.
+  Every captured response from a genuine Continuum 0.40 client is 46 bytes, with the map CRC-32 at offset 42; build 0.38 stops after the timer drift, for 42. A server that insists on either length logs an invalid length, leaves the challenge unanswered and kicks the other build's client a quarter of a minute later, naming the wrong cause — and insisting on 42 kicks the 0.40 client people actually play.
 
 ### docs (the `00 12` / `00 13` exchange, corrected)
 - `docs/protocol/encryption.md` had `00 12` carrying a `u32` seed and the `00 13` reply at 86 bytes. Read off the 0.40 client: the reply is **88 bytes** (`00 13 00 00`, a seed, twenty `u32` words), the client **never reads the `00 12`** — no payload, no length gate — and the seed is derived locally rather than received, so nothing is echoed and nothing is re-keyed. `00 13` is client-to-server only. No server has been observed to send a `00 12`.

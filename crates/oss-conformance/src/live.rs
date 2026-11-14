@@ -1198,7 +1198,7 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
                 "security-exe-checksum",
                 s.exe_checksum == want,
                 format!(
-                    "expected {want:08x} (SubSpace 1.34), got {:08x}",
+                    "expected {want:08x} (the ASSS/nullspace VIE value; a client reporting 0 computes none), got {:08x}",
                     s.exe_checksum
                 ),
             );
