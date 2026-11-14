@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/oss-formats"
 readme = "README.md"
 # ASSS's sample map is GPL data: kept in the repository for tests, left out

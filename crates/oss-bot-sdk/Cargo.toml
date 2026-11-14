@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/oss-bot-sdk"
 readme = "README.md"
 keywords = ["subspace", "continuum", "bot", "gamedev", "sdk"]
