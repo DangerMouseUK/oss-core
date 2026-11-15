@@ -366,7 +366,9 @@ fn pages() -> Vec<Page> {
             "security / seeds",
             Sources,
             S2C_SOURCES,
-            "A key of 0 delivers seeds only; any other key asks for a C2S `0x1A` security response. The conformance suite's live client checks verify the response."
+            "A key of 0 delivers seeds only; any other key asks for a C2S `0x1A` security response. The conformance suite's live client checks verify the response.
+
+**The key is a 31-bit number.** A server may send `1..=0x7FFF_FFFF` and nothing else: zero is the reserved \"seeds only\" value and nothing at or above `0x8000_0000` is a legitimate key, so a server drawing a key at random must bound the draw rather than use a raw 32-bit value. [checksums.md](../checksums.md#the-key-space) gives the evidence and says what goes wrong above the bound."
         ),
         fixed!(
             S2C,

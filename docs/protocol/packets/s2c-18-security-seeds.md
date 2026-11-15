@@ -19,13 +19,15 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | 1 | 4 | u32 | green_seed | Prize seed. |
 | 5 | 4 | u32 | door_seed | Door seed. |
 | 9 | 4 | u32 | timestamp | Server time the seeds apply from (ticks). |
-| 13 | 4 | u32 | key | Checksum key: 0 = seeds only; otherwise answer with C2S `0x1A`. |
+| 13 | 4 | u32 | key | Checksum key: 0 = seeds only; otherwise answer with C2S `0x1A`. A server may send only `1..=0x7FFF_FFFF`. |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
 
 ## Notes
 
 A key of 0 delivers seeds only; any other key asks for a C2S `0x1A` security response. The conformance suite's live client checks verify the response.
+
+**The key is a 31-bit number.** A server may send `1..=0x7FFF_FFFF` and nothing else: zero is the reserved "seeds only" value and nothing at or above `0x8000_0000` is a legitimate key, so a server drawing a key at random must bound the draw rather than use a raw 32-bit value. [checksums.md](../checksums.md#the-key-space) gives the evidence and says what goes wrong above the bound.
 
 ## Evidence
 

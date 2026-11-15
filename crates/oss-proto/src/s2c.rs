@@ -348,7 +348,8 @@ fixed_packet! {
         pub door_seed: u32,
         /// Server time the seeds apply from (ticks).
         pub timestamp: u32,
-        /// Checksum key: 0 = seeds only; otherwise answer with C2S `0x1A`.
+        /// Checksum key: 0 = seeds only; otherwise answer with C2S `0x1A`. A
+        /// server may send only `1..=0x7FFF_FFFF`.
         pub key: u32,
     }
 }

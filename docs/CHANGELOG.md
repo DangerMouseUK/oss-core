@@ -10,6 +10,13 @@ Documentation only; no API change.
 
 - **`docs/protocol/encryption.md` now opens with the three eras** — VIE, Continuum and OpenSec — what each one is, and where this project stands on each. **VIE** is expanded for the first time anywhere public: Virgin Interactive Entertainment, the game's original publisher. Linked from the README, `docs/protocol/README.md` and the protocol index.
 
+### docs (the 31-bit checksum key space, and what an exe checksum match proves)
+
+Documentation only; no API change beyond a field's doc comment.
+
+- **A checksum key is a 31-bit number: `1..=0x7FFF_FFFF`.** `docs/protocol/checksums.md` gains a "key space" section with the evidence; `packets/s2c-18-security-seeds.md` states the range in the field table. A server drawing a key at random must bound the draw. Keys at or above `0x8000_0000` are outside the protocol: the implementations disagree there (the references divide a signed copy of the key, `oss-proto` divides unsigned, and the readings coincide exactly for every key in range), and a genuine SubSpace 1.34 client was measured stopping dead on one. The map-checksum description no longer presents negative keys as a live case, and `verification.md` records the case as moot rather than unconfirmed.
+- **What a VIE exe checksum match proves, stated plainly:** that an implementation agrees with the same single 1990s transcription every available reference descends from — not that it is SubSpace 1.34, which nothing still measurable can establish. In `checksums.md`, with the limit noted on the `security-exe-checksum` row in `docs/conformance.md` and in `verification.md`.
+
 ### oss-proto (the Continuum security response is 42 bytes in build 0.38, 46 in 0.40)
 - **Breaking: `SecurityResponse.continuum` is now `Option<(i16, Option<u32>)>`.** The map CRC-32 is optional on its own, because Continuum 0.38 sends the timer drift and stops there. A `None` CRC means the client reported none, which is not the same as reporting zero: a server must not compare it against the arena's map CRC.
 - **Breaking: `SecurityResponse::CONT_LEN` is now 42**, the length build 0.38 sends — it was 46, which is what 0.40 sends. The 46-byte form, with the map CRC, is the new `SecurityResponse::CONT_CRC_LEN`. A length check written as `len != CONT_LEN` still compiles and now rejects the opposite form, so every such check needs revisiting.
