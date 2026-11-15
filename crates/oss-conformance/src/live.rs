@@ -584,6 +584,45 @@ impl Session {
     }
 }
 
+/// The executable checksum a server announces in the S2C `0x0A` login
+/// response: the CRC-32 of `SUBSPACE.EXE` 1.34, which the original `subgame`
+/// and ASSS both send, and which a VIE client compares before it will play.
+/// See `docs/protocol/verification.md`.
+const VIE_LOGIN_EXE_CHECKSUM: u32 = 0xF142_9CE8;
+
+/// What the suite can honestly say about the checksum pair a server put in its
+/// S2C `0x0A` login response.
+enum LoginChecksums {
+    /// Nothing to compare. The string says why, and is printed beside the skip.
+    Skip(&'static str),
+    /// The server made a claim about the client's executable, so check it.
+    Compare,
+}
+
+/// Decides whether a login response's checksum pair can be judged.
+///
+/// `0xFFFFFFFF` in **both** fields is how a server marks the account staff, and
+/// a VIE client skips its comparison entirely for that pair. The server is
+/// entitled to send it and the suite has nothing to compare, so this is a skip
+/// rather than a pass: a suite that printed `PASS` here would be claiming it
+/// checked something it never saw.
+///
+/// That pair is also the reason a wrong code checksum can hide. Every staff
+/// login succeeds while every ordinary one is refused, so the skip reason tells
+/// the operator to re-run with an ordinary account.
+///
+/// Any other pair is a claim about the executable the client is running, which
+/// the client checks, so the suite checks it too.
+fn login_checksum_verdict(exe: u32, code: u32) -> LoginChecksums {
+    if exe == u32::MAX && code == u32::MAX {
+        LoginChecksums::Skip(
+            "the server marked this account staff (both checksums 0xFFFFFFFF), which a VIE client skips: re-run with an ordinary account to compare them",
+        )
+    } else {
+        LoginChecksums::Compare
+    }
+}
+
 fn session_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io::Result<()> {
     const G: &str = "server.session";
     let bind = if addr.is_ipv4() {
@@ -627,21 +666,21 @@ fn session_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io:
         ..Login::default()
     };
     s.send(login(0));
-    let mut code = None;
+    let mut response = None;
     for attempt in 0..2 {
         s.pump(opts.timeout, |p| matches!(p, S2CPacket::LoginResponse(_)));
-        code = s.packets.iter().rev().find_map(|(_, p)| match p {
-            S2CPacket::LoginResponse(l) => Some(l.code),
+        response = s.packets.iter().rev().find_map(|(_, p)| match p {
+            S2CPacket::LoginResponse(l) => Some((l.code, l.exe_checksum, l.code_checksum)),
             _ => None,
         });
-        if code == Some(login_code::NEW_USER) && attempt == 0 {
+        if response.map(|(code, _, _)| code) == Some(login_code::NEW_USER) && attempt == 0 {
             s.packets.clear();
             s.send(login(1));
             continue;
         }
         break;
     }
-    let Some(code) = code else {
+    let Some((code, exe_checksum, code_checksum)) = response else {
         r.fail(G, "login-response", "no S2C 0x0A login response");
         return Ok(());
     };
@@ -652,10 +691,52 @@ fn session_checks(addr: SocketAddr, opts: &ServerOptions, r: &mut Report) -> io:
     ) {
         r.skip(
             G,
-            "arena and map checks",
+            "login checksum, arena and map checks",
             format!("login refused with code {code} (try --name/--password)"),
         );
         return Ok(());
+    }
+
+    // The checksum pair in the login response. A VIE client recomputes both
+    // from its own executable and compares them, and a mismatch ends the
+    // session with security violation `0x17` a few milliseconds after a login
+    // the server believes succeeded -- with no diagnostic, because by then the
+    // client has quit. Zero is not an "omitted" marker here: it is a mismatch
+    // like any other wrong value.
+    //
+    // The expected code checksum is computed rather than written as a literal,
+    // so this check cannot drift away from the routine the client runs. That
+    // routine is pinned independently by `vectors/vie-exe-checksum.txt`, whose
+    // first entry is this very key-zero case.
+    match login_checksum_verdict(exe_checksum, code_checksum) {
+        LoginChecksums::Skip(why) => {
+            r.skip(G, "login-exe-checksum", why);
+            r.skip(G, "login-code-checksum", why);
+        }
+        LoginChecksums::Compare => {
+            r.check(
+                G,
+                "login-exe-checksum",
+                exe_checksum == VIE_LOGIN_EXE_CHECKSUM,
+                format!(
+                    "the login response announces exe checksum {exe_checksum:#010x}, \
+                     not {VIE_LOGIN_EXE_CHECKSUM:#010x} (the CRC-32 of SUBSPACE.EXE 1.34): \
+                     a VIE client offers the player an update instead of playing"
+                ),
+            );
+            let want = vie_exe_checksum(0);
+            r.check(
+                G,
+                "login-code-checksum",
+                code_checksum == want,
+                format!(
+                    "the login response announces code checksum {code_checksum:#010x}, \
+                     not {want:#010x} (the exe checksum routine at key 0): a VIE client \
+                     recomputes this, compares it, and rejects the server with security \
+                     violation 0x17 -- zero reads as a mismatch, not as \"not supplied\""
+                ),
+            );
+        }
     }
 
     // Arena entry.
@@ -1084,21 +1165,76 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
     z.send(s2c::LoginResponse {
         code: login_code::OK,
         server_version: 134,
-        exe_checksum: 0xF142_9CE8,
-        code_checksum: 0x281C_C948,
+        exe_checksum: VIE_LOGIN_EXE_CHECKSUM,
+        code_checksum: vie_exe_checksum(0),
         ..Default::default()
     });
-    z.pump(Duration::from_secs(1), |_| false);
-    let acked = z
-        .server
-        .connection(&peer)
-        .is_some_and(|c| c.queued_reliable() == 0);
-    r.check(
-        G,
-        "acks",
-        acked,
-        "the login response was not acknowledged within 1 s",
-    );
+    // Acknowledgement of the login response, polled rather than slept, with the
+    // elapsed time reported on the pass as well as on the fail.
+    //
+    // This used to pump a flat second and then look once. A failure was then
+    // unreadable: it said a budget had been missed but never by how much, so a
+    // slow client and a client with no acknowledgements at all printed the same
+    // line. It also cost every client run a full second even when the
+    // acknowledgement arrived in five milliseconds.
+    //
+    // The budget is five seconds, and that number is measured rather than
+    // round. On one machine on 2026-11-15:
+    //
+    // * an `oss-bot-sdk` bot acknowledges in 30-32 ms, 50 runs out of 50,
+    //   indistinguishable over VIE and OpenSec;
+    // * `oss-client` acknowledges in 981-1026 ms, 7 runs out of 7.
+    //
+    // That second figure is not the acknowledgement path. `oss-client` renders
+    // at 61 fps with a median frame of 14 ms, and exactly one frame in 1543
+    // takes 1017 ms -- 1015 ms of it blocked acquiring the swapchain surface
+    // while the window is still coming up. The login response arrives inside
+    // that one stalled frame, so its acknowledgement waits for the frame to
+    // end. Reliable packets later in the same session are acknowledged
+    // normally, which is what `arena-acks` below records, and the transport
+    // itself is covered by the bot figure above.
+    //
+    // So a one-second budget was timing a client's renderer start-up against a
+    // threshold that start-up sits exactly on, and the check came out close to
+    // a coin toss. Five seconds still catches what this check exists for -- a
+    // client that does not acknowledge reliable packets at all -- with five
+    // times the longest stall observed. Because the time is printed on success,
+    // a client drifting towards the budget says so long before it starts
+    // failing, which a pass/fail at one second never did.
+    const ACK_BUDGET: Duration = Duration::from_secs(5);
+    let t0 = Instant::now();
+    let mut acked_in = None;
+    while t0.elapsed() < ACK_BUDGET {
+        if z.server
+            .connection(&peer)
+            .is_some_and(|c| c.queued_reliable() == 0)
+        {
+            acked_in = Some(t0.elapsed());
+            break;
+        }
+        z.pump(Duration::from_millis(5), |_| false);
+    }
+    match acked_in {
+        Some(d) => r.pass(
+            G,
+            format!("acks (login response acknowledged in {} ms)", d.as_millis()),
+        ),
+        None => {
+            let queued = z
+                .server
+                .connection(&peer)
+                .map_or(0, |c| c.queued_reliable());
+            r.fail(
+                G,
+                "acks",
+                format!(
+                    "the login response was not acknowledged within {} s \
+                     ({queued} reliable packet(s) still unacknowledged)",
+                    ACK_BUDGET.as_secs()
+                ),
+            );
+        }
+    }
 
     // Arena entry.
     let got = z.wait_for(opts.timeout, |p| matches!(p, C2SPacket::GoArena(_)));

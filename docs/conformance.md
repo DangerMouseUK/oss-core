@@ -112,6 +112,8 @@ The suite connects to the server as a SubSpace (VIE) client.
 | Check | Requirement |
 |---|---|
 | `login-response` | C2S `0x09` gets S2C `0x0A`. If the name is unknown (code 1), the suite logs in again as a new user |
+| `login-exe-checksum` | the `0x0A` announces `0xF1429CE8`, the CRC-32 of `SUBSPACE.EXE` 1.34. A VIE client compares it and offers the player an update when it disagrees |
+| `login-code-checksum` | the `0x0A` announces the exe checksum routine at key 0, which for 1.34 is `0x281CC948`. A VIE client recomputes and compares it, so **zero here is a mismatch, not a "not supplied"**: the client quits with security violation `0x17` milliseconds after a login the server thinks succeeded. Both checksums are skipped, with a reason, when the server sends `0xFFFFFFFF` in both -- the staff marker, which the client skips. **A staff account therefore cannot catch a wrong value; re-run with an ordinary one** |
 | `arena-player-id`, `arena-settings`, `arena-settings-size`, `arena-self-listed`, `arena-map-filename`, `arena-entered` | after C2S `0x01`: the player id, the 1428-byte settings packet, a `0x03` listing this player, the `0x29` map name, and `0x02` |
 | `arena-order` | player id, then settings, then `0x02` last (the reference order, which clients rely on) |
 | `map-download`, `map-crc`, `map-parses` | C2S `0x0C` gets S2C `0x2A`. Its zlib contents match the CRC-32 announced in `0x29` and parse as a level |
@@ -160,7 +162,7 @@ The suite listens as a zone and checks the first client that connects. It accept
 | `connect-request` | the first datagram is `00 01 <key> 01 00` or an OpenSec hello |
 | `handshake` | the session is established |
 | `login`, `login-name` | C2S `0x09` (or `0x24`) arrives with a non-empty name |
-| `acks` | the reliable login response is acknowledged within a second |
+| `acks` | the reliable login response is acknowledged within 5 s, and the suite reports how long it took. The budget is deliberately far above any measured time: a bot acknowledges in about 30 ms, while `oss-client` takes about a second because one frame early in start-up blocks while its window's swapchain comes up, and the acknowledgement waits for that frame to end. The check exists to catch a client that does not acknowledge at all, so it is the reported time, not the budget, that is worth reading |
 | `go-arena` | C2S `0x01` follows the login response |
 | `arena-acks` | every reliable of the arena entry (sent packed in clusters) and of the map transfer is acknowledged within 3 s |
 | `map-request` | C2S `0x0C` after the `0x29` map name. Skipped if the client already has the map |

@@ -13,7 +13,7 @@ use oss_conformance::adapter::{self, Process, Reference};
 use oss_conformance::live::{self, ClientOptions, DirectoryOptions, ServerOptions};
 use oss_conformance::{Report, Status, vectors};
 use oss_net::{Config, Event, Server, VieAcceptor};
-use oss_proto::checksum::crc32;
+use oss_proto::checksum::{crc32, vie_exe_checksum};
 use oss_proto::common::PlayerData;
 use oss_proto::s2c::{self, MapFilename, login_code};
 use oss_proto::wire::FixedStr;
@@ -173,6 +173,14 @@ fn zone(sock: UdpSocket, stop: Arc<AtomicBool>, population: Arc<std::sync::atomi
                         s2c::LoginResponse {
                             code: login_code::OK,
                             server_version: 134,
+                            // The checksum pair a VIE client recomputes and
+                            // compares. `..Default::default()` leaves both zero,
+                            // which is a mismatch rather than an omission -- the
+                            // defect oss-server shipped for seven days. This
+                            // fixture is what makes `login-code-checksum` run on
+                            // every push instead of only on a hand-started rig.
+                            exe_checksum: 0xF142_9CE8,
+                            code_checksum: vie_exe_checksum(0),
                             ..Default::default()
                         }
                         .into(),
