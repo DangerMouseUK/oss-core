@@ -7,7 +7,7 @@ A versioned, implementation-driven description of the SubSpace/Continuum network
 | Page | Contents |
 |---|---|
 | [transport.md](transport.md) | core `0x00` packets: setup, reliable delivery, clusters, big and sized transfers, time sync, disconnects, size limits |
-| [encryption.md](encryption.md) | the VIE cipher, the shape of the Continuum handshake, the plug-in model |
+| [encryption.md](encryption.md) | the three encryption eras (VIE, Continuum, OpenSec), the VIE cipher in full, the shape of the Continuum handshake, the plug-in model |
 | [opensec.md](opensec.md) | OpenSec v1: X25519 + ChaCha20-Poly1305 transport encryption (specification) |
 | [websocket-relay.md](websocket-relay.md) | `oss-relay.1`: carrying datagrams over WebSocket for browser clients |
 | [verification.md](verification.md) | what is verified against reference vectors, what comes from sources, and what is partly inferred |

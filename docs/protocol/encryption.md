@@ -4,6 +4,20 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Implemented 
 
 The connection request (`00 01`) carries a protocol word that selects the encryption family: 0x0001 for SubSpace's **VIE** cipher, 0x0011 for **Continuum**. Servers may also fall back to VIE, or to no encryption, for Continuum clients.
 
+## The three eras
+
+Game traffic has been encrypted three different ways over the life of this game. All three names are used throughout these repositories; this is the one place that introduces them.
+
+| Era | What it is | Where this project stands |
+|---|---|---|
+| **VIE** | The original SubSpace cipher, named after **Virgin Interactive Entertainment**, the game's publisher — the 1998 client's version resource carries that name. An XOR keystream over a table expanded from a 32-bit session key, negotiated in the clear. It gives no confidentiality against anyone on the path and no integrity at all. | **Implemented in full, with vectors** — the rest of this page |
+| **Continuum** | The scheme the Continuum client brought in when it replaced the original SubSpace client, and still what most long-running zones require. The builds measured here are 0.38 and 0.40. | **Deliberately not implemented.** Only the handshake's [shape](#continuum-shape-only) is documented. A module developed outside these repositories supplies the cipher through the plug-in traits below, which is how a real Continuum client came to play on oss-server |
+| **OpenSec** | This project's own, and the only one of the three that is modern cryptography: X25519, ChaCha20-Poly1305 and HKDF-SHA256, optional at both ends. | **Implemented and specified in full** — [opensec.md](opensec.md) |
+
+One of the three is withheld, and only its method. That the Continuum scheme exists, that zones require it, that this project interoperates with it, and that a module for it is being developed are all stated plainly here and in the READMEs. How it works is not, and will not be.
+
+"No encryption" is a fourth case rather than an era: a VIE key of 0, or a client key echoed back unchanged, means the session runs in the clear, and both the reference server and this one accept it.
+
 ## VIE
 
 **Key negotiation**

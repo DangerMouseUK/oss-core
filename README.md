@@ -155,6 +155,11 @@ group. There are also `directory` and `biller` modes for zone registration and S
   with the evidence behind it.
 - **File formats:** [`.lvl` and eLVL](docs/formats/lvl.md), [`.lvz`](docs/formats/lvz.md),
   [`.ossr` replays](docs/formats/replay.md).
+- **How the traffic is encrypted:** three schemes have been used over the life of this
+  game — VIE (after Virgin Interactive Entertainment, the original publisher), Continuum's
+  own, and OpenSec — and
+  [docs/protocol/encryption.md](docs/protocol/encryption.md#the-three-eras) says what each
+  one is and where this project stands on it.
 - **OpenSec**, the optional modern transport (X25519 + ChaCha20-Poly1305):
   [docs/protocol/opensec.md](docs/protocol/opensec.md).
 - **Performance and capacity planning:** [docs/performance.md](docs/performance.md).

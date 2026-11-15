@@ -4,6 +4,12 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### docs (the three encryption eras)
+
+Documentation only; no API change.
+
+- **`docs/protocol/encryption.md` now opens with the three eras** — VIE, Continuum and OpenSec — what each one is, and where this project stands on each. **VIE** is expanded for the first time anywhere public: Virgin Interactive Entertainment, the game's original publisher. Linked from the README, `docs/protocol/README.md` and the protocol index.
+
 ### oss-proto (the Continuum security response is 42 bytes in build 0.38, 46 in 0.40)
 - **Breaking: `SecurityResponse.continuum` is now `Option<(i16, Option<u32>)>`.** The map CRC-32 is optional on its own, because Continuum 0.38 sends the timer drift and stops there. A `None` CRC means the client reported none, which is not the same as reporting zero: a server must not compare it against the arena's map CRC.
 - **Breaking: `SecurityResponse::CONT_LEN` is now 42**, the length build 0.38 sends — it was 46, which is what 0.40 sends. The 46-byte form, with the map CRC, is the new `SecurityResponse::CONT_CRC_LEN`. A length check written as `len != CONT_LEN` still compiles and now rejects the opposite form, so every such check needs revisiting.
