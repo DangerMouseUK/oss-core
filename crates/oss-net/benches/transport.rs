@@ -144,7 +144,143 @@ fn reliable_round_trip(c: &mut Criterion) {
 }
 
 #[cfg(feature = "opensec")]
-criterion_group!(benches, vie, opensec, reliable_round_trip);
+/// The re-key step. A fresh `00 01` from an address whose connection has not
+/// started its session re-runs the whole acceptor chain and swaps the cipher
+/// (`Server::handle_datagram` -> `Connection::set_cipher`), keeping sequence
+/// numbers and queues. The cost is almost entirely the acceptor's: OpenSec
+/// generates an ephemeral X25519 key and does one Diffie-Hellman per selected
+/// capability, VIE builds a 520-byte table. Both directions are measured
+/// because they differ by two orders of magnitude.
+fn rekey(c: &mut Criterion) {
+    use std::sync::{Arc, Mutex};
+
+    use oss_net::opensec::{Entropy, OpenSecAcceptor, OpenSecClientHandshake, ServerKey};
+    use oss_net::{Acceptor, CipherKind};
+
+    /// Deterministic entropy, so a run is reproducible; it still yields a fresh
+    /// ephemeral per call, which is what makes each iteration do the real work.
+    fn entropy(seed: u64) -> Entropy {
+        let s = Mutex::new(seed | 1);
+        Arc::new(move |b: &mut [u8]| {
+            let mut x = s.lock().unwrap();
+            for v in b.iter_mut() {
+                *x ^= *x << 13;
+                *x ^= *x >> 7;
+                *x ^= *x << 17;
+                *v = *x as u8;
+            }
+        })
+    }
+
+    /// The datagram a client's first tick puts on the wire.
+    fn first_datagram(hs: Box<dyn oss_net::Handshake>) -> Vec<u8> {
+        let mut c = Connection::client(Config::client(), hs, 0);
+        c.poll_transmit().expect("the handshake emits on tick 0")
+    }
+
+    fn opensec_hello(seed: u64) -> Vec<u8> {
+        first_datagram(Box::new(OpenSecClientHandshake::new(&entropy(seed), None)))
+    }
+
+    fn vie_request(key: u32) -> Vec<u8> {
+        first_datagram(Box::new(VieClientHandshake::new(key)))
+    }
+
+    /// A server offering both mechanisms, with one connection already
+    /// established from `first` and its session not yet started: the state in
+    /// which a re-key is possible.
+    fn in_window(key: Option<ServerKey>, first: &[u8]) -> Server<u32> {
+        let mut s = Server::new(Config::server());
+        s.add_acceptor(Box::new(OpenSecAcceptor::new(key, entropy(7))));
+        s.add_acceptor(Box::new(VieAcceptor::default()));
+        s.handle_datagram(0, ADDR, first);
+        while s.poll_transmit().is_some() {}
+        while s.poll_event().is_some() {}
+        let conn = s.connection(&ADDR).expect("the first request is accepted");
+        assert!(conn.is_connected() && !conn.session_started());
+        s
+    }
+
+    let server_key = ServerKey::generate(&entropy(99));
+    let hello = opensec_hello(1);
+    let vie_one = vie_request(1);
+    let vie_two = vie_request(2);
+
+    let mut g = c.benchmark_group("rekey");
+    g.throughput(Throughput::Elements(1));
+
+    // The acceptors on their own, so the cost can be attributed.
+    let opensec_acceptor = OpenSecAcceptor::new(Some(server_key.clone()), entropy(11));
+    let vie_acceptor = VieAcceptor::default();
+    let mut out = Vec::new();
+    g.bench_function("accept_opensec_hello", |b| {
+        b.iter(|| {
+            out.clear();
+            let a = opensec_acceptor.accept(0, black_box(&hello), &mut out);
+            assert!(matches!(a, Some(oss_net::Accept::Established(_))));
+        })
+    });
+    g.bench_function("accept_vie_request", |b| {
+        b.iter(|| {
+            out.clear();
+            let a = vie_acceptor.accept(0, black_box(&vie_one), &mut out);
+            assert!(matches!(a, Some(oss_net::Accept::Established(_))));
+        })
+    });
+
+    // VIE connection, OpenSec request: the expensive direction, because the
+    // OpenSec acceptor claims the hello and does the key agreement.
+    let mut server = in_window(Some(server_key.clone()), &vie_one);
+    g.bench_function("vie_to_opensec", |b| {
+        b.iter(|| {
+            server.handle_datagram(0, ADDR, black_box(&hello));
+            while let Some((_, d)) = server.poll_transmit() {
+                server.recycle(d);
+            }
+        })
+    });
+    assert_eq!(
+        server.connection(&ADDR).unwrap().cipher_kind(),
+        Some(CipherKind::OpenSec)
+    );
+
+    // OpenSec connection, VIE request: the cheap direction. The OpenSec
+    // acceptor rejects an 8-byte request on sight and VIE builds its table.
+    let mut server = in_window(Some(server_key.clone()), &hello);
+    g.bench_function("opensec_to_vie", |b| {
+        b.iter(|| {
+            server.handle_datagram(0, ADDR, black_box(&vie_one));
+            while let Some((_, d)) = server.poll_transmit() {
+                server.recycle(d);
+            }
+        })
+    });
+    assert_eq!(
+        server.connection(&ADDR).unwrap().cipher_kind(),
+        Some(CipherKind::Vie)
+    );
+
+    // Same mechanism, different client key: the legacy case this branch exists
+    // for (a lost `00 02`, a client restart before login).
+    let mut server = in_window(Some(server_key), &vie_one);
+    g.bench_function("vie_to_vie", |b| {
+        b.iter(|| {
+            server.handle_datagram(0, ADDR, black_box(&vie_two));
+            while let Some((_, d)) = server.poll_transmit() {
+                server.recycle(d);
+            }
+        })
+    });
+    assert_eq!(
+        server.connection(&ADDR).unwrap().cipher_kind(),
+        Some(CipherKind::Vie)
+    );
+
+    g.finish();
+}
+
+#[cfg(feature = "opensec")]
+criterion_group!(benches, vie, opensec, rekey, reliable_round_trip);
 #[cfg(not(feature = "opensec"))]
 criterion_group!(benches, vie, reliable_round_trip);
 criterion_main!(benches);
