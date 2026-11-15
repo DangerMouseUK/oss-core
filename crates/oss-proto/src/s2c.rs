@@ -208,7 +208,11 @@ fixed_packet! {
         pub unused2: [u8; 5],
         /// Non-zero asks the client for registration data (C2S `0x17`).
         pub demo_data: u8,
-        /// Code checksum.
+        /// The exe checksum computed with a checksum key of zero
+        /// -- that is, `checksum::vie_exe_checksum(0)` --
+        /// which for `SUBSPACE.EXE` 1.34 is `0x281CC948`. A VIE client
+        /// computes the same value and compares it, so a server that sends
+        /// zero here is sending a mismatch, not a "not applicable".
         pub code_checksum: u32,
         /// CRC-32 of the news file (0 = none).
         pub news_checksum: u32,

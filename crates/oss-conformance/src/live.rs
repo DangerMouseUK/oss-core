@@ -1079,6 +1079,8 @@ pub fn check_client(sock: UdpSocket, opts: &ClientOptions) -> io::Result<Report>
         !login.name.as_bytes().is_empty(),
         "empty name",
     );
+    // The code checksum is the exe checksum routine at key 0, and a VIE client
+    // recomputes and compares it: zero here is a mismatch, not an omission.
     z.send(s2c::LoginResponse {
         code: login_code::OK,
         server_version: 134,

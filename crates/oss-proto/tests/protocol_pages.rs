@@ -252,7 +252,7 @@ fn pages() -> Vec<Page> {
             "login response",
             Sources,
             S2C_SOURCES,
-            "Result codes are listed in [game-packets.md](../game-packets.md#login-response-0x0a-36-bytes). An exe checksum and code checksum both `0xFFFFFFFF` mark the user as staff."
+            "Result codes are listed in [game-packets.md](../game-packets.md#login-response-0x0a-36-bytes). An exe checksum and code checksum both `0xFFFFFFFF` mark the user as staff, and a client told that skips both comparisons.\n\nThe two checksum fields are different numbers computed different ways. `exe_checksum` is the CRC-32 of the client executable; `code_checksum` is that executable's *checksum routine* evaluated with a checksum key of zero — the same routine the C2S `0x1A` security response uses with a key the server chooses. A client recomputes `code_checksum` and compares it, so **a server that sends zero there is sending a value the client rejects**; it is not an \"omitted\" or \"not applicable\" marker. Zero *is* genuine in the opposite direction: a SubSpace 1.34 client reports zero for its own exe checksum in the security response, because it computes none. The first entry in the `vie-exe-checksum` vectors is this value.\n\nThe trailing `unused3` block is not always zero on the wire: the original server places `0x00000056` in its second word. A genuine 1.34 client logs in and plays normally when that word is zero, so nothing appears to read it; what it is for is not known."
         ),
         fixed!(
             S2C,
