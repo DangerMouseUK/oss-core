@@ -141,7 +141,7 @@ The suite listens as a directory server (UDP, normally port 4991) and checks the
 
 ## Live billing checks
 
-The suite listens as an SSC billing server, and the zone under test connects to it as a client: the standard transport without encryption, with every packet reliable (see [billing.md](protocol/billing.md)). With `--zone`, the suite also logs a player into the zone over a normal client connection, and plays the biller's part of that login.
+The suite listens as an SSC billing server, and the zone under test connects to it as a client: the standard transport, with every packet reliable (see [billing.md](protocol/billing.md)). It answers with VIE, which is what `oss-biller` serves and what `billing_ssc`'s connector asks for, and accepts an unencrypted link behind that for a zone that asks for one. Until 2026-11-16 it offered only the unencrypted acceptor, so a zone asking to encrypt was answered with a refusal and ran in the clear. With `--zone`, the suite also logs a player into the zone over a normal client connection, and plays the biller's part of that login.
 
 | Check | Requirement |
 |---|---|

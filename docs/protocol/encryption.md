@@ -16,7 +16,7 @@ Game traffic has been encrypted three different ways over the life of this game.
 
 One of the three is withheld, and only its method. That the Continuum scheme exists, that zones require it, that this project interoperates with it, and that a module for it is being developed are all stated plainly here and in the READMEs. How it works is not, and will not be.
 
-"No encryption" is a fourth case rather than an era: a VIE key of 0, or a client key echoed back unchanged, means the session runs in the clear, and both the reference server and this one accept it.
+"No encryption" is a fourth case rather than an era: a VIE key of 0, or a client key echoed back unchanged, means the session runs in the clear. **It is reached only when both ends have been set to allow it**, never by negotiation — see [no encryption, and why it is not negotiable](#no-encryption-and-why-it-is-not-negotiable).
 
 ## VIE
 
@@ -24,7 +24,7 @@ One of the three is withheld, and only its method. That the Continuum scheme exi
 
 - The client picks a 32-bit key with the top bit set.
 - The server answers `00 02` with the negated key and keys its cipher with that value.
-- The client accepts only the negation of its key (enable VIE) or its own key echoed back (no encryption). A key of 0 also means no encryption.
+- The client accepts the negation of its key, which enables VIE. Its own key echoed back, or a key of 0, means no encryption — and `oss-net` takes that answer only from a handshake that asked for an unencrypted session, because nothing in this exchange is authenticated. See below.
 
 **Some servers gate the response behind a challenge.** Subgame 1.34.14 does not answer `00 01` directly. It replies with a six-byte `00 05`, and sends nothing at all until the client echoes the id back:
 
@@ -56,10 +56,25 @@ The six-byte `00 05` is the short form of the [sync request](packets/core-05-syn
 **Key edge cases** (the first two confirmed against the reference server):
 
 - **Client key 1.** The server answers −1 (`0xFFFFFFFF`) and encrypts with it. The reference server's own *client* code uses −1 as a "bad key" sentinel and would run unencrypted, which breaks the session. This project follows the server: −1 is a normal key.
-- **Client key `0x80000000`.** Its negation is itself, so the response looks like "no encryption" to a client, yet the reference server keys VIE with it. A client must never offer this key. `oss-net` never generates it (`client_key_from_seed` maps it to `0x80000001`), and `VieAcceptor` encrypts just as the reference server does.
-- **Client keys below 1024 (subgame only).** Subgame 1.34.14 ignores a connection request whose client key is below 1024 and answers nothing — bisected, with 1023 silent and 1024 answered. A key of 0, which is how a client asks for no encryption, therefore cannot work against it, although it is correct for ASSS. Measured against that one server; the reason for the floor is not known.
+- **Client key `0x80000000`.** Its negation is itself, so one response means both "VIE with this key" and "no encryption". The reference server keys VIE with it, so `oss-net` reads the answer as VIE: the ambiguity is resolved towards encrypting, at both ends. A client must never offer this key, and `oss-net` never generates it (`client_key_from_seed` maps it to `0x80000001`).
+- **Client keys below 1024 (subgame only).** Subgame 1.34.14 ignores a connection request whose client key is below 1024 and answers nothing — bisected, with 1023 silent and 1024 answered. A key of 0, which is how a client asks for no encryption, therefore cannot work against it. ASSS does honour it; `oss-net`'s `VieAcceptor` deliberately does not, which is the one place this implementation answers a documented vector differently (see below). Measured against that one server; the reason for the floor is not known.
 
 The test vectors in `crates/oss-net/tests/vectors/vie.txt` come from running the reference VIE module unmodified. They cover key exchange, tables and per-packet encryption for 16 keys, including the two above.
+
+## No encryption, and why it is not negotiable
+
+Nothing in the `00 01` / `00 02` exchange is authenticated. It is two datagrams in the clear, and a server's "I will not encrypt" is just the client's own key sent back. So anything that can watch the path and send a datagram can produce that answer — on the first connection, before any attempt has failed and with nothing to step down from. Treated as a protocol outcome, "no encryption" is therefore available to an attacker rather than to an operator.
+
+`oss-net` treats it as a **policy** instead: a decision somebody makes at each end, which the other end cannot make for them.
+
+| | |
+|---|---|
+| **Server** | `VieAcceptor` declines a request whose client key is 0 rather than answering it. Unencrypted sessions are `NullAcceptor`'s job, and a server registers that acceptor only because an operator asked for it — behind `VieAcceptor`, so it sees only the requests VIE declined. |
+| **Client** | `VieClientHandshake` fails the handshake on a `00 02` that echoes its key back. `VieClientHandshake::unencrypted()` is the handshake that asked for one and will accept it; `accept_refusal()` opts an ordinary handshake in, for a link that carries nothing secret and would otherwise not connect at all. |
+
+Both ends must therefore have been set before any session runs in the clear, and a forged answer gets a failed handshake instead of a readable session. `crates/oss-net/tests/encryption_floor.rs` demonstrates the exposure and pins the behaviour; it keeps one deliberate run of the old behaviour so the demonstration cannot quietly stop demonstrating anything.
+
+**What it costs.** `oss-net` can no longer talk to a server that genuinely refuses encryption, and no longer serves a client that genuinely cannot encrypt, unless the operator or the user says so. That is a real interoperability loss against ASSS, which honours a zero key. It is not a loss against the original server, which ignores client keys below 1024 and so never answered a request for no encryption in the first place.
 
 ## Continuum (shape only)
 

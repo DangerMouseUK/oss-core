@@ -1679,7 +1679,14 @@ pub fn check_zone_billing(sock: UdpSocket, opts: &BillerOptions) -> io::Result<R
     let mut r = Report::default();
     sock.set_read_timeout(Some(Duration::from_millis(5)))?;
     let mut server = Server::new(Config::server());
-    // Zones connect to billers without encryption.
+    // Zones connect to billers over VIE: `oss-biller` answers with `VieAcceptor`
+    // and `billing_ssc`'s UDP connector asks for an encrypted session. The null
+    // acceptor stays registered behind it for a zone that asks for no encryption
+    // (client key 0), which VIE declines; it used to be the only one here, and a
+    // zone asking to encrypt was quietly answered in the clear.
+    server.add_acceptor(Box::new(oss_net::VieAcceptor {
+        accept_continuum: false,
+    }));
     server.add_acceptor(Box::new(oss_net::NullAcceptor));
     let mut b = Biller {
         sock,

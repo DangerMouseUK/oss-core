@@ -254,13 +254,16 @@ impl Cipher for VieCipher {
     }
 }
 
-/// Builds the cipher for a negotiated VIE key (key 0 means no encryption).
-pub fn vie_cipher(key: u32) -> Box<dyn Cipher> {
-    match VieCipher::new(key) {
-        Some(c) => Box::new(c),
-        None => Box::new(NullCipher),
-    }
-}
+// There was a `vie_cipher(key)` helper here that returned a `NullCipher` for key
+// 0. It was removed rather than fixed: both of this crate's VIE paths called it
+// with a key taken straight off the wire, so "the peer asked for nothing" became
+// an unencrypted session with nobody having decided that. Both now build a
+// `VieCipher` directly and treat a key that expands to nothing as *not a VIE
+// session*. Unencrypted sessions are reached only through `NullAcceptor` on the
+// server and `VieClientHandshake::unencrypted` on the client, each of which
+// somebody has to turn on. `VieCipher::new` and `NullCipher` are both public, so
+// a caller that genuinely wants the old behaviour can still write it, and has to
+// write it on purpose.
 
 /// `00 01` connection request: (client key, protocol), if `data` is one.
 pub fn parse_connect(data: &[u8]) -> Option<(u32, u16)> {
@@ -283,6 +286,14 @@ fn connect_response(key: u32) -> Vec<u8> {
 /// Server-side VIE acceptor: answers `00 01` (protocol 1, and optionally the
 /// Continuum protocol `0x11` as a fallback) with `00 02` carrying the negated
 /// client key, and encrypts with that key.
+///
+/// **It answers only with an encrypted session.** A client key of 0 is how the
+/// protocol asks for no encryption at all; this acceptor declines such a request
+/// rather than answering it, so that the connection either encrypts or is not
+/// made. Serving unencrypted sessions is [`NullAcceptor`]'s job, and a server
+/// registers that one only because an operator asked for it. Declining also
+/// matches the original server, which ignores any client key below 1024 (see
+/// [`VieClientHandshake::unencrypted`]); it is ASSS that honours a zero key.
 #[derive(Debug, Clone, Copy)]
 pub struct VieAcceptor {
     /// Also accept Continuum clients (protocol `0x11`) with VIE encryption.
@@ -304,13 +315,26 @@ impl Acceptor for VieAcceptor {
             return None;
         }
         let server_key = vie::server_key_for(key);
+        // A key that expands to nothing is not a VIE session, so there is no
+        // answer to give: `VieCipher::new` rejects key 0, which is the one the
+        // protocol uses to ask for no encryption. Built before the reply is
+        // queued so the two cannot drift apart.
+        let cipher = VieCipher::new(server_key)?;
         out.push(connect_response(server_key));
-        Some(Accept::Established(vie_cipher(server_key)))
+        Some(Accept::Established(Box::new(cipher)))
     }
 }
 
 /// Server-side acceptor for unencrypted sessions: echoes the client's key, which
 /// tells clients to disable encryption. Accepts both protocols.
+///
+/// **Register it only because somebody asked for it, and register it last.** It
+/// answers every connection request, so ahead of [`VieAcceptor`] it would put
+/// every connection in the clear; behind it, it sees only the requests VIE
+/// declined. Nothing automatic should ever reach it: a client that did not ask
+/// for an unencrypted session refuses this answer
+/// (see [`VieClientHandshake::accept_refusal`]), so both ends have to be set
+/// before a connection runs in the clear.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NullAcceptor;
 
@@ -355,6 +379,9 @@ const REMEMBERED_PREFIX: usize = 8;
 pub struct VieClientHandshake {
     key: u32,
     protocol: u16,
+    /// Whether an answer refusing encryption is acceptable. See
+    /// [`accept_refusal`](Self::accept_refusal); off unless asked for.
+    allow_refusal: bool,
     started: Option<u64>,
     last_sent: Option<u64>,
     timeout_ms: u64,
@@ -375,13 +402,36 @@ impl VieClientHandshake {
         Self::with_key(vie::client_key_from_seed(seed), 0x01)
     }
 
-    /// Requests an unencrypted session (client key 0).
+    /// Requests an unencrypted session (client key 0), and accepts the answer.
+    ///
+    /// **This is the only way this type will end in a [`NullCipher`] on its own.**
+    /// Somebody has to have chosen it: it is not reachable from
+    /// [`new`](Self::new), and nothing a server sends can turn an ordinary
+    /// handshake into this one.
     ///
     /// Correct for ASSS. **Subgame ignores any client key below 1024** — bisected
     /// against subgame 1.34.14, which stays silent at 1023 and answers at 1024 — so a
     /// key of 0 never gets a reply there, and the handshake times out.
     pub fn unencrypted() -> Self {
-        Self::with_key(0, 0x01)
+        Self::with_key(0, 0x01).accept_refusal()
+    }
+
+    /// Accepts "I will not encrypt" — the client's own key echoed back in the
+    /// `00 02` — as an unencrypted session instead of failing the handshake.
+    ///
+    /// **Off by default, and it should stay off on anything carrying a secret.**
+    /// Neither the request nor the answer is authenticated, so anything on the
+    /// network path can send that answer, on the first connection, with no
+    /// failed attempt and no step down. A handshake that accepts it can
+    /// therefore be put into the clear by one forged datagram.
+    ///
+    /// Turn it on only where the link carries nothing worth hiding *and* not
+    /// connecting at all is the worse outcome — a public lookup such as the
+    /// zone list, where every byte in both directions is public anyway. A game
+    /// session carries the player's password and is never such a link.
+    pub fn accept_refusal(mut self) -> Self {
+        self.allow_refusal = true;
+        self
     }
 
     /// A handshake with an explicit key and protocol word (`0x01` SubSpace,
@@ -389,14 +439,17 @@ impl VieClientHandshake {
     ///
     /// Two keys to avoid. **`0x8000_0000` is a trap**: the VIE server key derived from
     /// it is itself, so the reply is indistinguishable from a server echoing the key
-    /// back to refuse encryption, and the session is set up with [`NullCipher`] while
-    /// the server encrypts. [`VieClientHandshake::new`] cannot produce it.
+    /// back to refuse encryption. The ambiguity is resolved towards VIE, because the
+    /// reference server keys VIE with it, so the session now encrypts rather than
+    /// silently running in the clear against an encrypting server.
+    /// [`VieClientHandshake::new`] cannot produce it.
     /// **Keys below 1024** are ignored outright by subgame (see
     /// [`unencrypted`](Self::unencrypted)).
     pub fn with_key(key: u32, protocol: u16) -> Self {
         Self {
             key,
             protocol,
+            allow_refusal: false,
             started: None,
             last_sent: None,
             timeout_ms: 10_000,
@@ -509,10 +562,28 @@ impl Handshake for VieClientHandshake {
         match data {
             [0, 2, a, b, c, d, ..] => {
                 let server_key = u32::from_le_bytes([*a, *b, *c, *d]);
-                if server_key == self.key {
-                    Step::Established(Box::new(NullCipher))
-                } else if server_key == vie::server_key_for(self.key) {
-                    Step::Established(vie_cipher(server_key))
+                // VIE first, and it is tried first on purpose: for the key
+                // 0x80000000 the negation is the key itself, so the two arms
+                // below both match, and the reference server keys VIE with it.
+                if server_key == vie::server_key_for(self.key)
+                    && let Some(c) = VieCipher::new(server_key)
+                {
+                    Step::Established(Box::new(c))
+                } else if server_key == self.key {
+                    // The client's own key back: "I will not encrypt". Nothing
+                    // in this exchange is authenticated, so this answer can come
+                    // from anything on the path rather than from the server --
+                    // on the first connection, with no failed attempt and no
+                    // step down. Taking it is therefore a decision somebody has
+                    // to have made before the connection started.
+                    if self.allow_refusal {
+                        Step::Established(Box::new(NullCipher))
+                    } else {
+                        Step::Failed(
+                            "the server's 00 02 refused encryption (it echoed the client key \
+                             back) and this connection did not ask for an unencrypted session",
+                        )
+                    }
                 } else {
                     // An answer, just not one we can use: keep it for the
                     // failure message instead of waiting out the clock in
@@ -749,29 +820,50 @@ mod tests {
         assert_eq!(d, [0x06, 1, 2, 3, 4, 5, 6, 7]);
     }
 
+    /// Who may end up unencrypted, and who may not. Both halves of this test
+    /// asserted the opposite until 2026-11-16: a VIE server answered a request
+    /// for no encryption, and an ordinary client took "I will not encrypt" from
+    /// anything that sent it.
     #[test]
-    fn null_and_unencrypted() {
+    fn an_unencrypted_session_takes_a_decision_at_each_end() {
+        // The client asked (key 0) and the server allows it: no encryption.
         let mut client = VieClientHandshake::unencrypted();
         let mut out = Vec::new();
         client.poll(0, &mut out);
         let mut replies = Vec::new();
-        // VIE server with key 0 answers 0: no encryption.
-        assert!(
-            VieAcceptor::default()
-                .accept(0, &out[0], &mut replies)
-                .is_some()
-        );
+        assert!(NullAcceptor.accept(0, &out[0], &mut replies).is_some());
         assert!(
             matches!(client.on_datagram(0, &replies[0], &mut out), Step::Established(c) if c.name() == "none")
         );
 
+        // The client asked and only VIE is listening: VIE declines rather than
+        // answering, so no connection is made and nothing is queued.
+        let mut asking = VieClientHandshake::unencrypted();
+        let mut o1 = Vec::new();
+        asking.poll(0, &mut o1);
+        let mut r1 = Vec::new();
+        assert!(VieAcceptor::default().accept(0, &o1[0], &mut r1).is_none());
+        assert!(r1.is_empty(), "a declined request must draw no reply");
+
+        // The client did not ask and is told "I will not encrypt": refused.
         let mut c2 = VieClientHandshake::new(99);
         let mut o2 = Vec::new();
         c2.poll(0, &mut o2);
         let mut r2 = Vec::new();
         assert!(NullAcceptor.accept(0, &o2[0], &mut r2).is_some());
+        assert!(matches!(
+            c2.on_datagram(0, &r2[0], &mut o2),
+            Step::Failed(_)
+        ));
+
+        // The same client, told the same thing, having opted in: accepted.
+        let mut c3 = VieClientHandshake::new(99).accept_refusal();
+        let mut o3 = Vec::new();
+        c3.poll(0, &mut o3);
+        let mut r3 = Vec::new();
+        assert!(NullAcceptor.accept(0, &o3[0], &mut r3).is_some());
         assert!(
-            matches!(c2.on_datagram(0, &r2[0], &mut o2), Step::Established(c) if c.name() == "none")
+            matches!(c3.on_datagram(0, &r3[0], &mut o3), Step::Established(c) if c.name() == "none")
         );
     }
 

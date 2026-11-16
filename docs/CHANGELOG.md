@@ -4,6 +4,18 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (an unencrypted session now takes a decision at each end)
+
+**Breaking, and it changes who can put a connection in the clear.** Three paths reached an unencrypted session with nothing configured, all inside the VIE handshake rather than below it. Each needed one unauthenticated datagram, and none of them involved breaking a cipher.
+
+- **`VieAcceptor` declines a connection request whose client key is 0** instead of answering it. A key of 0 expands to no cipher, and the acceptor used to hand back the `NullCipher` that fell out of that, so any peer could ask a public server for no encryption and get it. Serving unencrypted sessions is `NullAcceptor`'s job; register it *behind* `VieAcceptor`, and only because an operator asked. **This is the one place `oss-net` answers a recorded reference vector differently on purpose**: ASSS honours a zero key, the original server (subgame 1.34.14) ignores any client key below 1024 and does not.
+- **`VieClientHandshake` fails on a `00 02` that echoes its own key back** — the "I will not encrypt" answer — unless it asked for an unencrypted session. It used to establish a `NullCipher`, so one forged datagram from anything on the path put the session, and the player's password, in the clear on the first connection. **New `VieClientHandshake::accept_refusal()`** opts a handshake back in, for a link carrying nothing secret that would otherwise not connect at all (the zone-list lookup is the only such link in these repositories). `unencrypted()` implies it.
+- **A forged `00 01` can no longer re-key a server connection into the clear.** Before a connection's session starts, a second connection request from its address re-runs the acceptors and replaces its cipher (`tests/rekey_window.rs` measures that window). With the first change there is no longer an acceptor in a default build willing to answer such a request.
+- **The key `0x80000000` now resolves to VIE at both ends.** Its negation is itself, so the answer is both the VIE answer and a refusal; the reference server keys VIE with it, and the client used to read it as a refusal and run in the clear while the server encrypted.
+- **Removed `cipher::vie_cipher`.** It returned a `NullCipher` for key 0 and both VIE paths called it with a key taken off the wire, which is how two of the above happened. Both now build a `VieCipher` directly. `VieCipher::new` and `NullCipher` are public, so the old behaviour is still writable — deliberately.
+
+`tests/encryption_floor.rs` demonstrates each exposure and pins the fix; `docs/protocol/encryption.md` has a new section, and `docs/protocol/transport.md` says it at the handshake.
+
 ### docs (the three encryption eras)
 
 Documentation only; no API change.

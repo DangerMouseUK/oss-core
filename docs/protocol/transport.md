@@ -34,9 +34,16 @@ A core datagram shorter than 2 bytes, or a packet that fails its length check, i
 
 1. The client sends `00 01` with its key and protocol word. It resends about once a second until it gets an answer, and gives up after about 10 s.
 2. The server recognises a new connection only from a `00 01` (or, for Continuum, `00 11`) arriving from an unknown address. It ignores anything else from unknown addresses and sends no reply.
-3. The server's encryption handler validates the request, creates the connection, sends a raw `00 02` with its key, and keys its cipher. A VIE server answers with the negated client key. An unencrypted server echoes the client's key back.
+3. The server's encryption handler validates the request, creates the connection, sends a raw `00 02` with its key, and keys its cipher. A VIE server answers with the negated client key. A server that will not encrypt echoes the client's key back.
 4. If the server has no free slot, it answers with a raw `00 07` instead.
-5. The client keys its cipher from the `00 02` it receives. A key equal to its own key, or a key of 0, means no encryption. The client then logs in, which is game-level traffic.
+5. The client keys its cipher from the `00 02` it receives. The negated key enables VIE. A key equal to its own key, or a key of 0, means no encryption. The client then logs in, which is game-level traffic.
+
+**Neither datagram is authenticated, so "no encryption" is a decision, not an answer.** Anything on the network path can send a `00 02` echoing back the key it just watched the client offer, on the first connection, with no failed attempt and no step down; and any peer can offer a key of 0. `oss-net` therefore treats both ends of this as policy rather than protocol:
+
+- `VieAcceptor` **declines** a request whose key is 0 instead of answering it. Serving unencrypted sessions is `NullAcceptor`'s job, and a server registers that one only because an operator asked. Register it behind `VieAcceptor`, so it sees only what VIE declined. (ASSS honours a zero key; the original server, subgame 1.34.14, ignores any client key below 1024 and does not.)
+- `VieClientHandshake` **fails** on a `00 02` that echoes its key back, unless it asked for an unencrypted session — `VieClientHandshake::unencrypted()`, or `accept_refusal()` on a link that carries nothing secret and would otherwise not connect at all.
+
+So an unencrypted session takes a decision at each end, and neither end can be talked into one by the other.
 
 A repeated `00 01` from a known address is handled in one of two ways:
 

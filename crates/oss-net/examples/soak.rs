@@ -295,8 +295,9 @@ fn main() -> ExitCode {
                 &entropy(rng.next()),
                 Some(opensec_key.public()),
             )),
-            // With the null acceptor the server echoes the key, which selects no
-            // encryption; with VIE it answers with the server key.
+            // The null acceptor answers an unencrypted session, and a handshake
+            // only takes that answer if it asked for one, so "none" has to ask.
+            "none" => Box::new(VieClientHandshake::unencrypted()),
             _ => Box::new(VieClientHandshake::new(rng.next() as u32)),
         };
         Connection::client(Config::client(), hs, now)

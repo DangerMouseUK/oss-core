@@ -29,62 +29,100 @@ fn key(s: &str) -> u32 {
     u32::from_str_radix(s, 16).unwrap()
 }
 
+/// The one client key this implementation deliberately answers differently from
+/// the reference server: 0, which is how the protocol asks for no encryption.
+/// ASSS honours it and the vectors record its answer (`0002 00000000`, the key
+/// echoed back). We decline, so that an unencrypted session needs a decision at
+/// each end rather than arriving on request — see `encryption_floor.rs`. The
+/// original server, subgame 1.34.14, ignores any client key below 1024 and so
+/// does not answer it either.
+const DECLINED_BY_POLICY: u32 = 0;
+
 #[test]
 fn key_exchange() {
     let mut n = 0;
+    let mut declined = 0;
     for f in records("keyexchange") {
         let (client_key, request, response) = (key(f[1]), hex(f[2]), hex(f[3]));
-        // The server answers the request with exactly the reference response.
         let mut out = Vec::new();
         let accepted = VieAcceptor {
             accept_continuum: false,
         }
         .accept(0, &request, &mut out);
+        // Our client builds the same request for that key, whatever we then do
+        // with it.
+        let mut hs = VieClientHandshake::with_key(client_key, 1);
+        let mut sent = Vec::new();
+        hs.poll(0, &mut sent);
+        assert_eq!(sent[0], request, "key {client_key:#x}");
+
+        if client_key == DECLINED_BY_POLICY {
+            assert!(accepted.is_none(), "key {client_key:#x} must be declined");
+            assert!(out.is_empty(), "a declined request must draw no reply");
+            // The reference's answer is still in the vector; a client that did
+            // not ask for an unencrypted session refuses it.
+            assert_eq!(response, [0, 2, 0, 0, 0, 0]);
+            assert!(matches!(
+                hs.on_datagram(0, &response, &mut sent),
+                Step::Failed(_)
+            ));
+            declined += 1;
+            continue;
+        }
+
+        // Every other key: the server answers with exactly the reference bytes
+        // and the client accepts them.
         assert!(
             matches!(accepted, Some(Accept::Established(_))),
             "key {client_key:#x}"
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0], response, "key {client_key:#x}");
-        // Our client builds the same request for that key and accepts the response.
-        let mut hs = VieClientHandshake::with_key(client_key, 1);
-        let mut sent = Vec::new();
-        hs.poll(0, &mut sent);
-        assert_eq!(sent[0], request);
         assert!(matches!(
             hs.on_datagram(0, &response, &mut sent),
             Step::Established(_)
         ));
         n += 1;
     }
-    assert_eq!(n, 16);
+    assert_eq!(n, 15);
+    assert_eq!(declined, 1);
 }
 
 #[test]
 fn client_state_edge_cases() {
-    // How a client should treat each server key. Two keys differ from the
-    // reference server's own client code; we follow the server (see
-    // docs/protocol/encryption.md):
+    // How a client treats each server key. Three keys differ from the reference
+    // server's own client code; in all three we follow the server, which
+    // encrypts (see docs/protocol/encryption.md and the `clientstate` records in
+    // the vector file, which say what the reference client does):
     // - client key 1 -> server key -1 (0xFFFFFFFF): the reference client mistakes
     //   it for its "bad key" sentinel and runs unencrypted, but the server
     //   encrypts. We encrypt.
-    // - client key 0x80000000 -> its negation is itself, so the response looks
-    //   like "no encryption" to a client, yet the reference server encrypts. A
-    //   client must never use that key; ours never does.
+    // - client key 0x80000000 -> its negation is itself, so the response is both
+    //   the VIE answer and a refusal to encrypt. The reference server encrypts
+    //   with it, so VIE is tried first and we encrypt too. A client must never
+    //   use that key; ours never does.
+    // - client key 0 -> the reference client runs unencrypted. We refuse,
+    //   because an unencrypted session is a decision and this handshake did not
+    //   make it; `VieClientHandshake::unencrypted` is the one that did.
     for f in records("keyexchange") {
         let client_key = key(f[1]);
-        let server_key = client_key.wrapping_neg();
-        let mut hs = VieClientHandshake::with_key(client_key, 1);
         let resp = hex(f[3]);
-        let Step::Established(c) = hs.on_datagram(0, &resp, &mut Vec::new()) else {
-            panic!()
+        let mut hs = VieClientHandshake::with_key(client_key, 1);
+        let step = hs.on_datagram(0, &resp, &mut Vec::new());
+        if client_key == DECLINED_BY_POLICY {
+            assert!(matches!(step, Step::Failed(_)), "key {client_key:#x}");
+            // Having asked, the same answer is accepted.
+            let mut asked = VieClientHandshake::unencrypted();
+            let Step::Established(c) = asked.on_datagram(0, &resp, &mut Vec::new()) else {
+                panic!("key {client_key:#x} must be accepted once asked for")
+            };
+            assert_eq!(c.name(), "none");
+            continue;
+        }
+        let Step::Established(c) = step else {
+            panic!("key {client_key:#x}")
         };
-        let expect_vie = server_key != 0 && server_key != client_key;
-        assert_eq!(
-            c.name(),
-            if expect_vie { "vie" } else { "none" },
-            "key {client_key:#x}"
-        );
+        assert_eq!(c.name(), "vie", "key {client_key:#x}");
     }
     // The server side encrypts for 0x80000000 as the reference does.
     let mut out = Vec::new();
