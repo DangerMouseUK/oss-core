@@ -90,15 +90,108 @@ fn drive(
     until_ms: u64,
     login: bool,
 ) -> Window {
-    let mut wire: Vec<(u64, bool, Vec<u8>)> = Vec::new();
+    drive_link(
+        client,
+        server,
+        Link::clean(one_way_ms),
+        Inject::default(),
+        until_ms,
+        login,
+    )
+    .window
+}
+
+/// A link with a fixed one-way delay, optional jitter and optional loss. A
+/// clean link is the special case with both at zero.
+#[derive(Debug, Clone, Copy)]
+struct Link {
+    one_way_ms: u64,
+    /// Each datagram is held an extra 0..=`jitter_ms`, which also reorders.
+    jitter_ms: u64,
+    /// Chance in a thousand that a datagram is dropped, each way.
+    loss_per_mille: u64,
+    /// Seed for the loss and jitter draws, so a run is reproducible.
+    seed: u64,
+}
+
+impl Link {
+    fn clean(one_way_ms: u64) -> Self {
+        Link {
+            one_way_ms,
+            jitter_ms: 0,
+            loss_per_mille: 0,
+            seed: 1,
+        }
+    }
+}
+
+/// A deliberate interference with the client's datagrams, so a hazard can be
+/// shown rather than waited for.
+#[derive(Debug, Clone, Copy, Default)]
+struct Inject {
+    /// Drop the client's datagram with this index, counting from zero over
+    /// every datagram it hands to the link.
+    drop_nth: Option<u32>,
+    /// Deliver a second copy of each legacy `00 01` this many ms behind the
+    /// first. Duplication and reordering are the only ways a `00 01` can reach
+    /// the server after the window has shut.
+    dup_legacy_after_ms: Option<u64>,
+}
+
+/// What a run of [`drive_link`] ended up doing.
+#[derive(Debug)]
+struct Run {
+    window: Window,
+    client_kind: Option<CipherKind>,
+    server_kind: Option<CipherKind>,
+    /// Whether the server still has a connection for the address at the end.
+    server_has_connection: bool,
+    /// Why the client stopped, if it did.
+    client_failure: Option<DisconnectReason>,
+}
+
+/// xorshift64, so loss and jitter are reproducible from the link's seed.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+}
+
+fn is_legacy_request(d: &[u8]) -> bool {
+    d.len() == 8 && d[0] == 0 && d[1] == 1
+}
+
+/// The general form of [`drive`]: the same step-by-step loop over a link that
+/// may drop, delay, reorder and duplicate.
+fn drive_link(
+    client: &mut Connection,
+    server: &mut Server<u32>,
+    link: Link,
+    inject: Inject,
+    until_ms: u64,
+    login: bool,
+) -> Run {
+    // (due, sequence, to_server, bytes). The sequence keeps datagrams that fall
+    // due in the same millisecond in the order they were sent.
+    let mut wire: Vec<(u64, u64, bool, Vec<u8>)> = Vec::new();
+    let mut rng = Rng(link.seed | 1);
     let mut window = Window::default();
     let mut sent_login = false;
+    let mut client_datagrams = 0u32;
+    let mut seq = 0u64;
+    let mut client_failure = None;
     for now in 0..=until_ms {
-        let (due, later) = std::mem::take(&mut wire)
+        let (mut due, later) = std::mem::take(&mut wire)
             .into_iter()
-            .partition::<Vec<_>, _>(|(t, _, _)| *t <= now);
+            .partition::<Vec<_>, _>(|(t, _, _, _)| *t <= now);
         wire = later;
-        for (_, to_server, d) in due {
+        due.sort_by_key(|(t, s, _, _)| (*t, *s));
+        for (_, _, to_server, d) in due {
             if to_server {
                 server.handle_datagram(now, ADDR, &d);
             } else {
@@ -106,19 +199,32 @@ fn drive(
             }
         }
         while let Some(e) = client.poll_event() {
-            if login && !sent_login && matches!(e, Event::Connected) {
-                client.send(&[0x24u8; 64], true);
-                sent_login = true;
+            match e {
+                Event::Connected if login && !sent_login => {
+                    client.send(&[0x24u8; 64], true);
+                    sent_login = true;
+                }
+                Event::Disconnected(r) => client_failure = client_failure.or(Some(r)),
+                _ => {}
             }
         }
         while server.poll_event().is_some() {}
         client.tick(now);
         server.tick(now);
         while let Some(d) = client.poll_transmit() {
-            wire.push((now + one_way_ms, true, d));
+            let idx = client_datagrams;
+            client_datagrams += 1;
+            if inject.drop_nth == Some(idx) {
+                continue;
+            }
+            if let (Some(extra), true) = (inject.dup_legacy_after_ms, is_legacy_request(&d)) {
+                seq += 1;
+                wire.push((now + link.one_way_ms + extra, seq, true, d.clone()));
+            }
+            post(&mut wire, &mut rng, link, now, &mut seq, true, d);
         }
         while let Some((_, d)) = server.poll_transmit() {
-            wire.push((now + one_way_ms, false, d));
+            post(&mut wire, &mut rng, link, now, &mut seq, false, d);
         }
         if let Some(c) = server.connection(&ADDR) {
             if window.opened.is_none() && c.is_connected() {
@@ -129,7 +235,35 @@ fn drive(
             }
         }
     }
-    window
+    Run {
+        window,
+        client_kind: client.cipher_kind(),
+        server_kind: server.connection(&ADDR).and_then(|c| c.cipher_kind()),
+        server_has_connection: server.connection(&ADDR).is_some(),
+        client_failure,
+    }
+}
+
+/// Hands one datagram to the link, dropping and delaying it as the link says.
+fn post(
+    wire: &mut Vec<(u64, u64, bool, Vec<u8>)>,
+    rng: &mut Rng,
+    link: Link,
+    now: u64,
+    seq: &mut u64,
+    to_server: bool,
+    d: Vec<u8>,
+) {
+    if link.loss_per_mille > 0 && rng.next() % 1000 < link.loss_per_mille {
+        return;
+    }
+    let jitter = if link.jitter_ms == 0 {
+        0
+    } else {
+        rng.next() % (link.jitter_ms + 1)
+    };
+    *seq += 1;
+    wire.push((now + link.one_way_ms + jitter, *seq, to_server, d));
 }
 
 /// While the window is open, a connection request a *different* mechanism
@@ -260,4 +394,234 @@ fn a_stagger_reaches_the_window_only_when_the_round_trip_exceeds_it() {
             "and both ends agree, one-way {one_way} ms"
         );
     }
+}
+
+/// A staggered client gets exactly one try at the modern handshake, because
+/// the gap before it falls back is the same 250 ms as the modern handshake's
+/// own resend timer, and `Fallback::poll` tests the switch first. So a single
+/// lost hello is not a delay, it is a permanent downgrade — and nothing on
+/// either end records that it happened.
+#[test]
+fn one_lost_hello_downgrades_the_connection_for_good() {
+    // The coupling the whole test rests on: the stagger is not longer than the
+    // modern handshake's own resend timer, so the switch always pre-empts the
+    // resend and the hello is sent exactly once. Checked at compile time, so
+    // moving either constant breaks the build here rather than quietly turning
+    // this into a test of something else.
+    const _: () = assert!(STAGGER_MS <= OpenSecClientHandshake::RESEND_MS);
+
+    // Dropping the hello, and nothing else, on an otherwise perfect link.
+    let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+    let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+        Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+        Box::new(VieClientHandshake::new(5)),
+        STAGGER_MS,
+    ));
+    let mut client = Connection::client(Config::client(), hs, 0);
+    let run = drive_link(
+        &mut client,
+        &mut server,
+        Link::clean(25),
+        Inject {
+            drop_nth: Some(0),
+            dup_legacy_after_ms: None,
+        },
+        2_000,
+        true,
+    );
+    assert_eq!(run.client_kind, Some(CipherKind::Vie));
+    assert_eq!(run.server_kind, Some(CipherKind::Vie));
+    assert_eq!(
+        run.client_failure, None,
+        "the connection is fine, just not the one that was offered"
+    );
+
+    // The same link, dropping the datagram after the hello instead: the cipher
+    // is unaffected, so it is the hello specifically and not loss in general.
+    let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+    let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+        Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+        Box::new(VieClientHandshake::new(5)),
+        STAGGER_MS,
+    ));
+    let mut client = Connection::client(Config::client(), hs, 0);
+    let run = drive_link(
+        &mut client,
+        &mut server,
+        Link::clean(25),
+        Inject {
+            drop_nth: Some(1),
+            dup_legacy_after_ms: None,
+        },
+        2_000,
+        true,
+    );
+    assert_eq!(run.client_kind, Some(CipherKind::OpenSec));
+    assert_eq!(run.server_kind, Some(CipherKind::OpenSec));
+}
+
+/// A second copy of a connection request is harmless while the window is open
+/// and fatal once it has shut, and the boundary is exactly one round trip
+/// behind the original — the width of the window itself. On a fast link that
+/// is a very small amount of reordering, so the hazard is worst where the link
+/// is best.
+#[test]
+fn a_duplicate_request_is_fatal_exactly_one_round_trip_late() {
+    for one_way in [10u64, 25, 50] {
+        let round_trip = 2 * one_way;
+        for (behind, fatal) in [(round_trip, false), (round_trip + 1, true)] {
+            let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+            let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+                Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+                Box::new(VieClientHandshake::new(5)),
+                STAGGER_MS,
+            ));
+            let mut client = Connection::client(Config::client(), hs, 0);
+            let run = drive_link(
+                &mut client,
+                &mut server,
+                Link::clean(one_way),
+                Inject {
+                    // Lose the hello, so the client really does send a `00 01`
+                    // and there is something to duplicate.
+                    drop_nth: Some(0),
+                    dup_legacy_after_ms: Some(behind),
+                },
+                STAGGER_MS + 4 * one_way + behind + 50,
+                true,
+            );
+            let width = run.window.closed.zip(run.window.opened).map(|(c, o)| c - o);
+            assert_eq!(
+                width,
+                Some(round_trip),
+                "one-way {one_way} ms: the window should be one round trip wide"
+            );
+            assert_eq!(
+                !run.server_has_connection, fatal,
+                "one-way {one_way} ms, duplicate {behind} ms behind: {run:?}"
+            );
+            if fatal {
+                assert_eq!(
+                    run.client_failure,
+                    Some(DisconnectReason::Remote),
+                    "and the client is told, rather than left hanging"
+                );
+            }
+        }
+    }
+}
+
+/// Loss, jitter and reordering do not leave the two ends holding different
+/// ciphers. The re-key is what keeps them in step: the server follows whatever
+/// the client's last connection request claimed, and the client only commits
+/// once it has an answer. This is the property the November 2026 design note
+/// doubted, so it is worth a standing check rather than one reading.
+#[test]
+fn a_lossy_link_never_leaves_the_ends_on_different_ciphers() {
+    let mut connected = 0;
+    let seeds = 24;
+    for seed in 0..seeds {
+        for one_way in [25u64, 150] {
+            let link = Link {
+                one_way_ms: one_way,
+                jitter_ms: 20,
+                loss_per_mille: 200,
+                seed: seed * 0x9E37_79B9 + 7,
+            };
+            let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+            let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+                Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+                Box::new(VieClientHandshake::new(5)),
+                STAGGER_MS,
+            ));
+            let mut client = Connection::client(Config::client(), hs, 0);
+            let run = drive_link(
+                &mut client,
+                &mut server,
+                link,
+                Inject::default(),
+                6_000,
+                true,
+            );
+            if let (Some(c), Some(s)) = (run.client_kind, run.server_kind) {
+                assert_eq!(c, s, "seed {seed}, one-way {one_way} ms: {run:?}");
+            }
+            if run.window.closed.is_some() {
+                connected += 1;
+            }
+        }
+    }
+    // Without this the test would pass on a link that never connects at all.
+    assert!(
+        connected * 4 >= seeds * 2 * 3,
+        "only {connected} of {} runs reached a session; the check above would \
+         be close to vacuous",
+        seeds * 2
+    );
+}
+
+/// The clean-link reading — safe below a 250 ms round trip, downgrades above
+/// it — does not survive ordinary jitter. At a 240 ms round trip, which the
+/// clean link puts comfortably on the modern side, a 0..40 ms wobble in each
+/// direction is enough to push most connections over the stagger and onto the
+/// legacy cipher. The boundary is not a line; it is a smear as wide as the
+/// jitter.
+#[test]
+fn jitter_moves_the_boundary_the_clean_link_appeared_to_fix() {
+    let one_way = 120; // a 240 ms round trip: 10 ms inside the stagger
+    let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+    let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+        Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+        Box::new(VieClientHandshake::new(5)),
+        STAGGER_MS,
+    ));
+    let mut client = Connection::client(Config::client(), hs, 0);
+    let run = drive_link(
+        &mut client,
+        &mut server,
+        Link::clean(one_way),
+        Inject::default(),
+        2_000,
+        true,
+    );
+    assert_eq!(
+        run.client_kind,
+        Some(CipherKind::OpenSec),
+        "on a clean link a 240 ms round trip stays on the modern cipher"
+    );
+
+    let seeds = 16;
+    let mut downgraded = 0;
+    for seed in 0..seeds {
+        let link = Link {
+            one_way_ms: one_way,
+            jitter_ms: 40,
+            loss_per_mille: 0,
+            seed: seed * 0x9E37_79B9 + 7,
+        };
+        let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+        let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+            Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+            Box::new(VieClientHandshake::new(5)),
+            STAGGER_MS,
+        ));
+        let mut client = Connection::client(Config::client(), hs, 0);
+        let run = drive_link(
+            &mut client,
+            &mut server,
+            link,
+            Inject::default(),
+            3_000,
+            true,
+        );
+        assert_eq!(run.client_kind, run.server_kind, "seed {seed}: {run:?}");
+        if run.client_kind == Some(CipherKind::Vie) {
+            downgraded += 1;
+        }
+    }
+    assert!(
+        downgraded * 2 > seeds,
+        "jitter of 0..40 ms each way downgraded {downgraded} of {seeds} runs at \
+         a 240 ms round trip; the clean-link figure says none of them should"
+    );
 }
