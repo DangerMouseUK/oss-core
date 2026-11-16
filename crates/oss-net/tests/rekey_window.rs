@@ -136,6 +136,9 @@ struct Inject {
     /// first. Duplication and reordering are the only ways a `00 01` can reach
     /// the server after the window has shut.
     dup_legacy_after_ms: Option<u64>,
+    /// Hold the client's datagram with this index back by this many extra ms,
+    /// which is reordering stated exactly instead of drawn at random.
+    delay_nth_ms: Option<(u32, u64)>,
 }
 
 /// What a run of [`drive_link`] ended up doing.
@@ -221,7 +224,11 @@ fn drive_link(
                 seq += 1;
                 wire.push((now + link.one_way_ms + extra, seq, true, d.clone()));
             }
-            post(&mut wire, &mut rng, link, now, &mut seq, true, d);
+            let held = match inject.delay_nth_ms {
+                Some((n, ms)) if n == idx => ms,
+                _ => 0,
+            };
+            post(&mut wire, &mut rng, link, now + held, &mut seq, true, d);
         }
         while let Some((_, d)) = server.poll_transmit() {
             post(&mut wire, &mut rng, link, now, &mut seq, false, d);
@@ -425,6 +432,7 @@ fn one_lost_hello_downgrades_the_connection_for_good() {
         Inject {
             drop_nth: Some(0),
             dup_legacy_after_ms: None,
+            delay_nth_ms: None,
         },
         2_000,
         true,
@@ -452,6 +460,7 @@ fn one_lost_hello_downgrades_the_connection_for_good() {
         Inject {
             drop_nth: Some(1),
             dup_legacy_after_ms: None,
+            delay_nth_ms: None,
         },
         2_000,
         true,
@@ -486,6 +495,7 @@ fn a_duplicate_request_is_fatal_exactly_one_round_trip_late() {
                     // and there is something to duplicate.
                     drop_nth: Some(0),
                     dup_legacy_after_ms: Some(behind),
+                    delay_nth_ms: None,
                 },
                 STAGGER_MS + 4 * one_way + behind + 50,
                 true,
@@ -511,13 +521,21 @@ fn a_duplicate_request_is_fatal_exactly_one_round_trip_late() {
     }
 }
 
-/// Loss, jitter and reordering do not leave the two ends holding different
-/// ciphers. The re-key is what keeps them in step: the server follows whatever
-/// the client's last connection request claimed, and the client only commits
-/// once it has an answer. This is the property the November 2026 design note
-/// doubted, so it is worth a standing check rather than one reading.
+/// Loss and jitter small against the round trip do not leave the two ends
+/// holding different ciphers. The re-key is what keeps them in step: the server
+/// follows whatever the client's last connection request claimed, and the
+/// client only commits once it has an answer. This is the property the November
+/// 2026 design note doubted, so it is worth a standing check rather than one
+/// reading.
+///
+/// **The bound is real and the next test is where it breaks.** This covers
+/// 20% loss with jitter up to 20 ms. A sweep of 20,000 runs per cell on
+/// 2026-11-16 found no disagreement at all up to 160 ms of jitter on a 240 ms
+/// round trip, and 2.08% at 320 ms, where the two connection requests can
+/// arrive in the wrong order. Do not read this test as saying more than it
+/// measures.
 #[test]
-fn a_lossy_link_never_leaves_the_ends_on_different_ciphers() {
+fn ordinary_loss_and_jitter_leave_the_ends_on_the_same_cipher() {
     let mut connected = 0;
     let seeds = 24;
     for seed in 0..seeds {
@@ -623,5 +641,205 @@ fn jitter_moves_the_boundary_the_clean_link_appeared_to_fix() {
         downgraded * 2 > seeds,
         "jitter of 0..40 ms each way downgraded {downgraded} of {seeds} runs at \
          a 240 ms round trip; the clean-link figure says none of them should"
+    );
+}
+
+/// The modern handshake's own retransmission can kill the connection it just
+/// made, and the stagger has nothing to do with it.
+///
+/// An OpenSec hello is a `00 01` connection request (`opensec.rs::is_client_hello`
+/// checks exactly that), so a resent hello reaches the same branch of
+/// `Server::handle_datagram` as a legacy one. While the window is open a
+/// byte-identical repeat is recognised and answered harmlessly. After the
+/// window shuts it closes the connection instead.
+///
+/// `OpenSecClientHandshake` resends every 250 ms, so a resend only happens when
+/// the first answer has not arrived by then — and on a link with a fixed delay
+/// that is self-cancelling: if the answer is later than 250 ms the resend is
+/// always earlier than the login it would have to overtake. It takes
+/// reordering. The client sends the resend at 250 ms and the login a moment
+/// later, on the heels of the answer; if the link delivers those two out of
+/// order, the connection the client has just established is closed from under
+/// it.
+#[test]
+fn a_resent_hello_can_close_the_session_it_just_opened() {
+    // A 252 ms round trip: the answer arrives at 252, two milliseconds after
+    // the client has given up waiting and resent the hello at 250.
+    let one_way = 126;
+    let nominal = |delay_of_the_resend| {
+        let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+        let mut client = opensec_client(1);
+        drive_link(
+            &mut client,
+            &mut server,
+            Link::clean(one_way),
+            Inject {
+                drop_nth: None,
+                dup_legacy_after_ms: None,
+                // Datagram 0 is the hello, 1 is the resend at 250 ms, 2 is the
+                // login sent when the answer lands at 252 ms.
+                delay_nth_ms: Some((1, delay_of_the_resend)),
+            },
+            1_500,
+            true,
+        )
+    };
+
+    // In order, the resend lands at 376 and the login at 378. The repeat is
+    // byte-identical to the request the connection came from and the window is
+    // still open, so the server answers it again and keeps the connection.
+    let in_order = nominal(0);
+    assert_eq!(in_order.window.closed, Some(378));
+    assert!(
+        in_order.server_has_connection,
+        "a repeat inside the window is harmless: {in_order:?}"
+    );
+    assert_eq!(in_order.client_failure, None);
+    assert_eq!(in_order.client_kind, Some(CipherKind::OpenSec));
+
+    // Ten milliseconds of reordering puts the same datagram at 386, eight
+    // milliseconds the wrong side of the login. The server closes the
+    // connection it finished setting up moments earlier.
+    let reordered = nominal(10);
+    assert_eq!(
+        reordered.window.closed,
+        Some(378),
+        "the session still starts at the same moment"
+    );
+    assert!(
+        !reordered.server_has_connection,
+        "the resend arrived after the window shut: {reordered:?}"
+    );
+    assert_eq!(
+        reordered.client_failure,
+        Some(DisconnectReason::Remote),
+        "and the client is dropped by the server it just connected to"
+    );
+
+    // It is the lateness and nothing else: the same delay applied while the
+    // window is still open leaves the connection alone. Four milliseconds puts
+    // the resend at 380 -- still after the login at 378, so this is the
+    // tightest case that must still fail -- while one millisecond puts it at
+    // 377, inside the window, and must not.
+    assert!(!nominal(4).server_has_connection, "380 is outside");
+    assert!(nominal(1).server_has_connection, "377 is inside");
+}
+
+/// How much reordering it takes to trigger the kill above, as a rule rather
+/// than one reading: the last hello resend goes out at the largest multiple of
+/// the resend timer below the round trip, and the login goes out when the
+/// answer lands, so the two are separated by the round trip modulo the resend
+/// timer. A round trip just over a multiple of 250 ms leaves almost no margin
+/// at all.
+#[test]
+fn the_margin_before_a_resent_hello_is_the_round_trip_modulo_the_resend_timer() {
+    for one_way in [126u64, 150, 200, 251, 376] {
+        let round_trip = 2 * one_way;
+        let margin = round_trip % OpenSecClientHandshake::RESEND_MS;
+        // The hello goes out at 0 and again every resend interval until the
+        // answer lands, so the client's datagrams are: 0 the hello, then one
+        // per resend, then the login. The last resend is the one that can
+        // overtake the login.
+        let resends = round_trip / OpenSecClientHandshake::RESEND_MS;
+        assert!(
+            margin > 0,
+            "a round trip on the boundary has no last resend"
+        );
+        let mut first_lethal = None;
+        for held in 0..=(margin + 20) {
+            let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+            let mut client = opensec_client(1);
+            let run = drive_link(
+                &mut client,
+                &mut server,
+                Link::clean(one_way),
+                Inject {
+                    drop_nth: None,
+                    dup_legacy_after_ms: None,
+                    delay_nth_ms: Some((resends as u32, held)),
+                },
+                4 * round_trip + 600,
+                true,
+            );
+            assert_eq!(
+                run.client_kind,
+                Some(CipherKind::OpenSec),
+                "one-way {one_way} ms: the cipher is not what is at stake here"
+            );
+            if !run.server_has_connection {
+                first_lethal = Some(held);
+                break;
+            }
+        }
+        assert_eq!(
+            first_lethal,
+            Some(margin + 1),
+            "one-way {one_way} ms (round trip {round_trip} ms): the resend should \
+             be survivable by exactly {margin} ms of reordering and no more"
+        );
+    }
+}
+
+/// Where that bound breaks: if the link delivers the two connection requests
+/// in the wrong order, the ends really can end up on different ciphers, and
+/// the connection is then dead without either end saying so.
+///
+/// The client sends its modern hello, gives up on it after the stagger and
+/// sends a legacy request. If the legacy request overtakes the hello, the
+/// server builds a legacy connection, answers it, and *then* receives the
+/// hello — which is still inside the window, so it re-keys the server to the
+/// modern cipher. The client, which committed to legacy when the answer
+/// arrived, cannot follow: `Fallback` hands everything to the rung it switched
+/// to, so the modern server hello is ignored. The client's login is then
+/// encrypted with a cipher the server no longer holds, the server cannot
+/// decrypt it, the window never shuts and nothing times out for 30 seconds.
+///
+/// It takes reordering on the order of the round trip, which is why the sweep
+/// only saw it at 320 ms of jitter. It is not a corner the code handles; it is
+/// a corner the code has not met.
+#[test]
+fn a_request_overtaking_the_hello_leaves_the_ends_on_different_ciphers() {
+    let one_way = 50;
+    let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
+    let hs: Box<dyn Handshake> = Box::new(Fallback::new(
+        Box::new(OpenSecClientHandshake::new(&entropy(1), None)),
+        Box::new(VieClientHandshake::new(5)),
+        STAGGER_MS,
+    ));
+    let mut client = Connection::client(Config::client(), hs, 0);
+    let run = drive_link(
+        &mut client,
+        &mut server,
+        Link::clean(one_way),
+        Inject {
+            drop_nth: None,
+            dup_legacy_after_ms: None,
+            // Hold the hello for 300 ms, so it lands at 350: after the legacy
+            // request the client sends at 250 (which lands at 300) and after
+            // the answer to it, but before the login would have shut the
+            // window at 400.
+            delay_nth_ms: Some((0, 300)),
+        },
+        2_000,
+        true,
+    );
+    assert_eq!(
+        run.client_kind,
+        Some(CipherKind::Vie),
+        "the client committed to the rung it switched to: {run:?}"
+    );
+    assert_eq!(
+        run.server_kind,
+        Some(CipherKind::OpenSec),
+        "the late hello re-keyed the server away from it: {run:?}"
+    );
+    assert_eq!(
+        run.window.closed, None,
+        "and so the login never arrives in a form the server can read, which \
+         leaves the window open rather than closing it"
+    );
+    assert_eq!(
+        run.client_failure, None,
+        "neither end reports anything for the whole two seconds"
     );
 }
