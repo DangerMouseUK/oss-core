@@ -338,8 +338,10 @@ pub struct Login {
     /// Permission id. A real client sends 0.
     pub permission_id: u32,
     /// The zone address the client is sending to, in the same host-order
-    /// encoding as [`Login::bound_ip`]. A capture against
-    /// `207.148.16.165` carries `0xCF9410A5`.
+    /// encoding as [`Login::bound_ip`]: a zone at `192.0.2.10` is carried as
+    /// `0xC000020A`, each byte of the dword one number of the address. The
+    /// address here is from the range reserved for documentation, because a
+    /// real one would name somebody's live zone.
     ///
     /// Some servers read this to classify the connection: zero together with a
     /// zero [`Login::bound_port`] is taken to mean a SOCKS5 proxy, `127.x.x.x`
