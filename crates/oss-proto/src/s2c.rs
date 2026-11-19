@@ -255,7 +255,20 @@ pub mod login_code {
     pub const SERVER_BUSY: u8 = 0x0E;
     /// Not enough usage.
     pub const TOO_LOW_USAGE: u8 = 0x0F;
-    /// No name.
+    /// No name; or, from Subspace Server .NET, success with a request for the
+    /// registration form. The two server families read `0x10` differently:
+    ///
+    /// - **ASSS** (`AUTH_NONAME`) sends it as a refusal, and only for a login
+    ///   whose name is blank.
+    /// - **Subspace Server .NET** (`AuthCode.AskDemographics`) sends it as a
+    ///   success, with [`LoginResponse::demo_data`](super::LoginResponse::demo_data)
+    ///   set, when its billing server wants the registration form (C2S `0x17`),
+    ///   and counts it as OK itself.
+    ///
+    /// A `0x10` answering a login that carried a name cannot be ASSS's refusal,
+    /// so it reads as the .NET success. The demographics byte does not decide
+    /// it: ASSS does not fill that byte in when it refuses. The name is ASSS's
+    /// reading, kept because consumers use it.
     pub const NO_NAME: u8 = 0x10;
     /// Too many demo users.
     pub const TOO_MANY_DEMO: u8 = 0x11;

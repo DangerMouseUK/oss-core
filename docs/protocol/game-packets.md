@@ -191,12 +191,14 @@ Result codes:
 | 3 | full | 13 | OK, no scores kept |
 | 4 | locked out | 14 | busy |
 | 5 | no permission | 15 | too little usage |
-| 6 | spectate only | 16 | no name |
+| 6 | spectate only | 16 | no name, or OK with the registration form (see below) |
 | 7 | too many points | 17 | too many demo users |
 | 8 | too slow | 18 | no demo users |
 | 9 | no permission (2) | 19 | custom text, Continuum only |
 
 Code 19 follows S2C `0x33`. Continuum also receives S2C `0x34` before `0x0A`.
+
+Code 16 means different things to the two server families. ASSS sends it as a refusal, and only when the login's name is blank. Subspace Server .NET sends it as a success, with the registration byte (offset 19) set, when its billing server wants the registration form (C2S `0x17`), and treats it as OK itself. A 16 answering a login that carried a name therefore cannot be the refusal, and a client reads it as the success. The registration byte cannot tell them apart, because ASSS does not fill it in when it refuses.
 
 ### Map file names (0x29)
 

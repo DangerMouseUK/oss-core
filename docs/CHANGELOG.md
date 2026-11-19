@@ -4,6 +4,12 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-proto, oss-bot-sdk (three corrections)
+
+- **`s2c::Redirect::ip`'s doc** now says the octets go out reversed (`d c b a` for a.b.c.d), as Subspace Server .NET and live zones send them; ASSS 1.4.4 sends network order. The codec is unchanged and keeps the bytes raw. The redirect packet page explains both.
+- **`login_code::NO_NAME` (`0x10`)** is documented with both readings: ASSS's refusal for a blank name, and Subspace Server .NET's success with a request for the registration form. The name is unchanged.
+- **`oss-bot-sdk`**: a bot with `create_account` set retries a login answered with `NEW_USER` once, with the new-user flag. A second `NEW_USER` is now reported as `LoginFailed` instead of starting another login, which went on for ever against a server that will not create the account. Not breaking.
+
 ### oss-net (stepping down between mechanisms closes the last attempt and starts afresh)
 
 **Breaking for anything that matches `Step` exhaustively or wraps a `Handshake`.** A client stepping down from one mechanism to the next could leave the server holding the connection its last attempt opened, and a server that keeps such a connection until it is closed then answered the next attempt and never heard its login. `docs/protocol/encryption.md` has a new section, "Stepping between mechanisms", with the whole rule.
