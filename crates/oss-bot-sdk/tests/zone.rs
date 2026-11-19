@@ -373,6 +373,51 @@ fn login_failure_is_reported() {
     assert!(bot.is_closed());
 }
 
+/// A server that answers "unknown name" even to the login asking it to create
+/// the account: the bot retries once with the new-user flag, then reports the
+/// refusal rather than asking again for ever.
+#[test]
+fn new_user_retry_is_made_once() {
+    let mut server: Server<u8> = Server::new(Config::server());
+    server.add_acceptor(Box::new(VieAcceptor::default()));
+    let mut bot = Session::new(BotConfig::new("Newcomer", "pw"), 0);
+    let mut flags = Vec::new();
+    let mut failed = None;
+    for now in (10..5_000).step_by(10) {
+        bot.tick(now);
+        server.tick(now);
+        while let Some(d) = bot.poll_transmit() {
+            server.handle_datagram(now, 0, &d);
+        }
+        while let Some((_, e)) = server.poll_event() {
+            if let Event::Packet(p) = e
+                && let Ok(C2SPacket::Login(l)) = C2SPacket::decode(&p)
+            {
+                flags.push(l.flags);
+                let r = S2CPacket::from(s2c::LoginResponse {
+                    code: login_code::NEW_USER,
+                    ..Default::default()
+                });
+                server.send(&0, &r.to_bytes(), true);
+            }
+        }
+        while let Some((_, d)) = server.poll_transmit() {
+            bot.handle_datagram(now, &d);
+        }
+        while let Some(e) = bot.poll_event() {
+            if let BotEvent::LoginFailed { code, reason } = e {
+                failed = Some((code, reason));
+            }
+        }
+        if bot.is_closed() {
+            break;
+        }
+    }
+    assert_eq!(flags, [0, 1], "one plain login, then one new-user login");
+    assert_eq!(failed, Some((login_code::NEW_USER, "unknown name")));
+    assert!(bot.is_closed());
+}
+
 /// A bot trying OpenSec, then VIE, against a server that answers neither: when
 /// it steps down it asks once for a fresh endpoint, which `run` takes by
 /// rebinding its socket, so the server meets the VIE attempt as a client it

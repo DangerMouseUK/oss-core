@@ -315,6 +315,10 @@ pub struct Session {
     freq: i16,
     last_position: Option<u64>,
     now: u64,
+    /// Whether a login carrying the new-user flag has gone out. A server that
+    /// answers that one with "unknown name" too is refusing, not asking, so the
+    /// retry is made once.
+    new_user_sent: bool,
 }
 
 impl core::fmt::Debug for Session {
@@ -410,6 +414,7 @@ impl Session {
             freq: 0,
             last_position: None,
             now: 0,
+            new_user_sent: false,
         }
     }
 
@@ -651,6 +656,7 @@ impl Session {
             ..Login::default()
         };
         self.send(login, true);
+        self.new_user_sent |= new_user;
         self.stage = Stage::LoggingIn;
     }
 
@@ -708,7 +714,9 @@ impl Session {
                     self.events.push_back(BotEvent::LoggedIn);
                     self.enter_arena();
                 }
-                login_code::NEW_USER if self.config.create_account => self.login(true),
+                login_code::NEW_USER if self.config.create_account && !self.new_user_sent => {
+                    self.login(true)
+                }
                 code => {
                     self.events.push_back(BotEvent::LoginFailed {
                         code,
