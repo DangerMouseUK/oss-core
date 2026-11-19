@@ -5,17 +5,17 @@ members = ["crates/*"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.0-dev6"
+version = "0.1.0-dev7"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/DangerMouseUK/oss-core"
 
 [workspace.dependencies]
-oss-proto = { path = "crates/oss-proto", version = "0.1.0-dev6" }
-oss-net = { path = "crates/oss-net", version = "0.1.0-dev6" }
-oss-formats = { path = "crates/oss-formats", version = "0.1.0-dev6" }
-oss-bot-sdk = { path = "crates/oss-bot-sdk", version = "0.1.0-dev6" }
+oss-proto = { path = "crates/oss-proto", version = "0.1.0-dev7" }
+oss-net = { path = "crates/oss-net", version = "0.1.0-dev7" }
+oss-formats = { path = "crates/oss-formats", version = "0.1.0-dev7" }
+oss-bot-sdk = { path = "crates/oss-bot-sdk", version = "0.1.0-dev7" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
