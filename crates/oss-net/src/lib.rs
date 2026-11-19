@@ -47,7 +47,8 @@ pub use cipher::{
     NullCipher, Step, VieAcceptor, VieClientHandshake,
 };
 pub use connection::{
-    Config, Connection, DisconnectReason, Event, Priority, SendFlags, Stats, TransferId, ticks,
+    Config, Connection, DisconnectReason, Event, FRESH_ENDPOINT_GRACE_MS, Priority, SendFlags,
+    Stats, TransferId, ticks,
 };
 pub use server::Server;
 pub use vie::VieCipher;

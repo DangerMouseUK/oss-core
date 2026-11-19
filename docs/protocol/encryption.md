@@ -113,3 +113,20 @@ Read from the 0.40 client's own handler for subtype `0x12`, by running it. No se
 - **`Acceptor`** (server): inspects a new peer's first raw datagram, sends raw replies, and returns either an established `Cipher` or a pending `Handshake`.
 - **`Handshake`** (either side): consumes raw setup datagrams and finally yields a `Cipher`. On the client, its first `poll` emits `00 01`.
 - **`Cipher`**: encrypts and decrypts whole datagrams. It also receives in-session core subtypes ≥ 0x10 and can queue packets of its own.
+
+## Stepping between mechanisms
+
+A client that can speak several mechanisms tries them in turn, from the strongest down, each one a *rung* of a `Fallback` (nest them for more than two). Every rung talks to the same server, so **an attempt the client gives up on can leave the server holding a connection for it**: the server may have answered late, answered in another mechanism, or taken one mechanism's opening for another's. Servers differ in what they then do with the next rung's request from the same address, and some keep the first connection (its keys, or the kind of client it recorded) until it is closed, so the next rung is answered and its login is then dropped without a word. A live zone was seen doing exactly that in November 2026.
+
+The rule, in `oss-net`, used by every client and bot built on it:
+
+1. **A rung steps down on silence, or at once on an answer in a mechanism it recognises.** On silence, after the `Fallback`'s time limit, unless the rung reports that the server has answered (`Handshake::answered`), in which case the clock stops however long setup takes. On a recognised answer, the rung returns `Step::StepDown` and the `Fallback` moves on immediately. A *failure* still ends the connection instead (no fallback on a tampered answer), and a key on record still means no fallback at all.
+2. **The rung being left closes what the server may hold for it** (`Handshake::abandon`): typically a disconnect, if the server answered.
+3. **The next rung starts from a fresh local endpoint.** The connection asks its driver once per step down (`Connection::take_fresh_endpoint`); a driver that can rebinds its socket to a new local port before the next rung's first datagram. The server then meets the next rung as a client it has never seen. The client drivers in these repositories all rebind.
+4. **A driver that cannot rebind is still served.** The next rung starts on the same endpoint: at once if the rung left closed nothing, otherwise after `FRESH_ENDPOINT_GRACE_MS`, so the server can let the closed connection go. Some servers send a plain `00 07` of their own when they finish with a connection the client closed; the first such `00 07` before the next rung is answered is read as that goodbye, not as a refusal of the next rung.
+
+`OpenSecClientHandshake` uses the rule itself: a SubSpace server that takes the OpenSec hello for its own connection request (the hello begins with `00 01` and a SubSpace protocol word) and answers it is recognised, stepped down from at once, and closed.
+
+**Our server's side** (`Server::handle_datagram`): an identical repeat of the request a connection came from is answered again, identically; a *different* request before the session starts is a new connection and replaces the old one outright (cipher, kind of client, sequence numbers), ending the old one with `Event::Disconnected(Reconnect)` and no `00 07`; a request after the session starts ends the old connection, and the client's next request opens a new one. A connection the client closes is let go at once. ASSS and Subspace Server .NET instead reuse the first connection for a second request before login, which is why the client rule above does not rely on the server's.
+
+`tests/stepping_down.rs` holds a server that keeps a connection's first handshake until it is closed, and shows each part of the rule against it.

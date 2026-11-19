@@ -452,6 +452,16 @@ impl Session {
         self.conn.recycle(buf);
     }
 
+    /// Whether the connection has stepped down to its next encryption
+    /// mechanism and wants it to start from a fresh local endpoint (true once
+    /// per step down). Send what [`Session::poll_transmit`] holds first, then
+    /// rebind the socket to a new local port before the next
+    /// [`Session::tick`]. See `oss_net::Connection::take_fresh_endpoint`; the
+    /// blocking [`crate::run`] does this itself.
+    pub fn take_fresh_endpoint(&mut self) -> bool {
+        self.conn.take_fresh_endpoint()
+    }
+
     /// The next event.
     pub fn poll_event(&mut self) -> Option<BotEvent> {
         self.events.pop_front()

@@ -103,6 +103,19 @@ pub enum Step {
     Established(Box<dyn Cipher>),
     /// Negotiation failed (e.g. the server refused with `00 07`, or a timeout).
     Failed(&'static str),
+    /// The server answered, but in a mechanism this handshake recognises and
+    /// does not speak: this attempt is over, and the next mechanism should be
+    /// tried now rather than after this one's time runs out.
+    ///
+    /// A [`Fallback`] steps down on it at once, closing this attempt first (see
+    /// [`Handshake::abandon`]). With nothing to step down to, the connection
+    /// treats it as [`Step::Failed`] with the same reason, so a handshake used on
+    /// its own (a pinned key, a mechanism asked for by name) still ends there.
+    ///
+    /// It is no new route to a downgrade: anyone who can forge the answer can
+    /// already force a step down by dropping the real one, which is why a key on
+    /// record means no fallback at all.
+    StepDown(&'static str),
 }
 
 impl core::fmt::Debug for Step {
@@ -111,6 +124,7 @@ impl core::fmt::Debug for Step {
             Self::Pending => f.write_str("Pending"),
             Self::Established(c) => write!(f, "Established({})", c.name()),
             Self::Failed(r) => write!(f, "Failed({r})"),
+            Self::StepDown(r) => write!(f, "StepDown({r})"),
         }
     }
 }
@@ -118,26 +132,82 @@ impl core::fmt::Debug for Step {
 /// A connection-setup state machine. Datagrams it receives and sends are raw
 /// (not passed through any session cipher); it may decrypt them itself if its
 /// protocol encrypts part of the setup.
+///
+/// # Stepping between mechanisms
+///
+/// A client that can speak several mechanisms tries them in turn, each one a
+/// *rung* of a [`Fallback`]. Every rung talks to the same server from the same
+/// client, so **an attempt the client gives up on can leave the server holding a
+/// connection for it**: the server may have answered late, answered in another
+/// mechanism, or taken one mechanism's opening for another's. What a server
+/// does with the next rung's request then depends on that server, and some
+/// keep the first connection (its keys, or the kind of client it recorded)
+/// until it is closed, so the next rung is answered and then not heard.
+///
+/// Three hooks, all optional, let a rung take part in stepping down properly,
+/// and a fourth lets the connection's driver start the next rung afresh:
+///
+/// - [`Handshake::answered`]: the server is talking to this rung; do not step
+///   down on the clock.
+/// - [`Step::StepDown`]: the server answered in a mechanism this rung does not
+///   speak; step down now.
+/// - [`Handshake::abandon`]: this rung is being left; send whatever closes what
+///   the server may hold for it.
+/// - [`Handshake::take_fresh_endpoint`]: a step down happened, so the next rung
+///   should reach the server from a new local endpoint, where the server holds
+///   nothing. [`crate::Connection::take_fresh_endpoint`] passes it to the driver.
+///
+/// A handshake that wraps another must forward all four.
 pub trait Handshake: Send {
     /// Handles a datagram received during setup. Raw replies go to `out`.
     fn on_datagram(&mut self, now: u64, data: &[u8], out: &mut Vec<Vec<u8>>) -> Step;
 
     /// Timer: send the first/next setup datagram, resend, or give up.
     fn poll(&mut self, now: u64, out: &mut Vec<Vec<u8>>) -> Step;
+
+    /// Whether the server has answered and setup is under way, so a
+    /// [`Fallback`] must not step down from this rung on the clock however long
+    /// the rest of setup takes. Default: never.
+    fn answered(&self) -> bool {
+        false
+    }
+
+    /// This rung is being left for the next one. Queue in `out` whatever closes
+    /// what the server may hold for it: typically a disconnect, if the server
+    /// answered. Called once, by the [`Fallback`] that steps down. Default:
+    /// nothing to close.
+    fn abandon(&mut self, _now: u64, _out: &mut Vec<Vec<u8>>) {}
+
+    /// Whether the handshake has stepped down since this was last asked, so the
+    /// next datagram it sends should go from a fresh local endpoint. True once
+    /// per step down. Default: never.
+    fn take_fresh_endpoint(&mut self) -> bool {
+        false
+    }
 }
 
-/// Tries one handshake, then switches to another if the first gets no answer
-/// within a time limit. Typical use: OpenSec first, VIE for servers that do not
-/// speak it. A *failure* of the first (for example a server key that does not
-/// match a pinned key) ends the handshake instead of falling back, so an
-/// attacker cannot force a downgrade by tampering; dropping packets still can,
-/// so clients that pinned a server key should not use a fallback at all.
+/// Tries one handshake, then steps down to another. Typical use: OpenSec first,
+/// VIE for servers that do not speak it. Nest them for more rungs.
+///
+/// It steps down when the first gets **no answer** within a time limit, unless
+/// the first reports that the server [`answered`](Handshake::answered), and at
+/// once when the first returns [`Step::StepDown`]. Either way it
+/// [abandons](Handshake::abandon) the first, so the server is told, and asks
+/// for a [fresh endpoint](Handshake::take_fresh_endpoint) before the second
+/// begins. See [`Handshake`], "Stepping between mechanisms".
+///
+/// A *failure* of the first (for example a server key that does not match a
+/// pinned key) ends the handshake instead of falling back, so an attacker
+/// cannot force a downgrade by tampering; dropping packets still can, so
+/// clients that pinned a server key should not use a fallback at all.
 pub struct Fallback {
     primary: Box<dyn Handshake>,
     secondary: Box<dyn Handshake>,
     switch_after_ms: u64,
     started: Option<u64>,
     on_secondary: bool,
+    /// Stepped down since [`Handshake::take_fresh_endpoint`] was last asked.
+    fresh_endpoint: bool,
 }
 
 impl core::fmt::Debug for Fallback {
@@ -162,12 +232,37 @@ impl Fallback {
             switch_after_ms,
             started: None,
             on_secondary: false,
+            fresh_endpoint: false,
         }
     }
 
     /// Whether the fallback handshake is in use.
     pub fn on_secondary(&self) -> bool {
         self.on_secondary
+    }
+
+    /// Leaves the primary for the secondary: the primary closes what it can,
+    /// and the secondary waits for its first [`Handshake::poll`], which comes
+    /// after the connection's driver has had the chance to take a fresh
+    /// endpoint.
+    fn step_down(&mut self, now: u64, out: &mut Vec<Vec<u8>>) {
+        self.primary.abandon(now, out);
+        self.on_secondary = true;
+        self.fresh_endpoint = true;
+    }
+
+    /// What the primary's step means here: a step down is taken, everything
+    /// else is passed on. A failure of the primary (e.g. a server key that does
+    /// not match a pinned key) ends the handshake: switching would be a
+    /// downgrade.
+    fn after_primary(&mut self, step: Step, now: u64, out: &mut Vec<Vec<u8>>) -> Step {
+        match step {
+            Step::StepDown(_) => {
+                self.step_down(now, out);
+                Step::Pending
+            }
+            other => other,
+        }
     }
 }
 
@@ -176,22 +271,48 @@ impl Handshake for Fallback {
         if self.on_secondary {
             self.secondary.on_datagram(now, data, out)
         } else {
-            // A failure of the primary (e.g. a server key that does not match a
-            // pinned key) ends the handshake: switching would be a downgrade.
-            self.primary.on_datagram(now, data, out)
+            let step = self.primary.on_datagram(now, data, out);
+            self.after_primary(step, now, out)
         }
     }
 
     fn poll(&mut self, now: u64, out: &mut Vec<Vec<u8>>) -> Step {
         let started = *self.started.get_or_insert(now);
-        if !self.on_secondary && now.saturating_sub(started) >= self.switch_after_ms {
-            self.on_secondary = true;
-        }
         if self.on_secondary {
-            self.secondary.poll(now, out)
-        } else {
-            self.primary.poll(now, out)
+            return self.secondary.poll(now, out);
         }
+        if !self.primary.answered() && now.saturating_sub(started) >= self.switch_after_ms {
+            self.step_down(now, out);
+            return Step::Pending;
+        }
+        let step = self.primary.poll(now, out);
+        self.after_primary(step, now, out)
+    }
+
+    fn answered(&self) -> bool {
+        if self.on_secondary {
+            self.secondary.answered()
+        } else {
+            self.primary.answered()
+        }
+    }
+
+    fn abandon(&mut self, now: u64, out: &mut Vec<Vec<u8>>) {
+        if self.on_secondary {
+            self.secondary.abandon(now, out);
+        } else {
+            self.primary.abandon(now, out);
+        }
+    }
+
+    fn take_fresh_endpoint(&mut self) -> bool {
+        let own = core::mem::take(&mut self.fresh_endpoint);
+        let inner = if self.on_secondary {
+            self.secondary.take_fresh_endpoint()
+        } else {
+            self.primary.take_fresh_endpoint()
+        };
+        own || inner
     }
 }
 

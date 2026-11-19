@@ -40,9 +40,7 @@ pub fn run(
     } else {
         "[::]:0"
     };
-    let socket = UdpSocket::bind(bind)?;
-    socket.connect(addr)?;
-    socket.set_read_timeout(Some(Duration::from_millis(10)))?;
+    let mut socket = open_socket(bind, addr)?;
 
     let start = Instant::now();
     let now = || start.elapsed().as_millis() as u64;
@@ -70,7 +68,22 @@ pub fn run(
             handler.on_event(&mut bot, event);
         }
         flush(&socket, &mut bot);
+        // A step down to the next encryption mechanism: what the last one sent
+        // has gone from the old socket, and the next one starts from a new
+        // local port, where the server holds nothing from the last attempt.
+        if bot.take_fresh_endpoint() {
+            socket = open_socket(bind, addr)?;
+        }
     }
+}
+
+/// A socket bound to `bind` (any port) and connected to `addr`, reading with a
+/// 10 ms timeout.
+fn open_socket(bind: &str, addr: std::net::SocketAddr) -> io::Result<UdpSocket> {
+    let socket = UdpSocket::bind(bind)?;
+    socket.connect(addr)?;
+    socket.set_read_timeout(Some(Duration::from_millis(10)))?;
+    Ok(socket)
 }
 
 fn flush(socket: &UdpSocket, bot: &mut Session) {

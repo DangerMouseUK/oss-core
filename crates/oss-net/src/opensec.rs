@@ -749,6 +749,9 @@ pub struct OpenSecClientHandshake {
     started: Option<u64>,
     last_sent: Option<u64>,
     timeout_ms: u64,
+    /// A SubSpace server took the hello for its own connection request and
+    /// answered it (see [`OpenSecClientHandshake::read_as_subspace`]).
+    subspace_answered: bool,
 }
 
 impl core::fmt::Debug for OpenSecClientHandshake {
@@ -775,7 +778,25 @@ impl OpenSecClientHandshake {
             started: None,
             last_sent: None,
             timeout_ms: 10_000,
+            subspace_answered: false,
         }
+    }
+
+    /// Whether `data` is a SubSpace server's answer to this hello, read as its
+    /// own connection request.
+    ///
+    /// The hello opens with `00 01`, then four bytes and a word that a SubSpace
+    /// (VIE) server reads as a client key and its protocol word, SubSpace's own.
+    /// A strict server checks the request's length and ignores the hello, but a
+    /// lenient one answers with the key response for that "key" and holds a
+    /// connection for the client. That is an answer in a mechanism the build
+    /// knows, so the rung steps down at once and closes it.
+    fn read_as_subspace(data: &[u8]) -> bool {
+        let read_key = u32::from_le_bytes(MAGIC);
+        data.len() == 6
+            && data[..2] == [0, 2]
+            && u32::from_le_bytes([data[2], data[3], data[4], data[5]])
+                == crate::vie::server_key_for(read_key)
     }
 
     /// Gives up after this long without an answer (default 10 s).
@@ -799,6 +820,12 @@ impl OpenSecClientHandshake {
 
 impl Handshake for OpenSecClientHandshake {
     fn on_datagram(&mut self, _now: u64, data: &[u8], _out: &mut Vec<Vec<u8>>) -> Step {
+        if Self::read_as_subspace(data) {
+            self.subspace_answered = true;
+            return Step::StepDown(
+                "the server answered the OpenSec hello as a SubSpace connection request",
+            );
+        }
         if data.len() < 6 || data[..2] != [0, 2] || data[2..6] != MAGIC {
             if data == [0, 7] {
                 return Step::Failed("server refused the connection");
@@ -833,11 +860,56 @@ impl Handshake for OpenSecClientHandshake {
         }
         Step::Pending
     }
+
+    /// Closes the connection a SubSpace server opened for the hello. VIE leaves
+    /// a two-byte core packet unencrypted, so the disconnect needs no key. Sent
+    /// twice, since a lost one would leave the connection standing.
+    fn abandon(&mut self, _now: u64, out: &mut Vec<Vec<u8>>) {
+        if self.subspace_answered {
+            out.push(vec![0, 7]);
+            out.push(vec![0, 7]);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lenient SubSpace server's answer to the hello is recognised, steps the
+    /// rung down at once and is closed when the rung is left. Anything else that
+    /// looks like a key response is not taken for it.
+    #[test]
+    fn a_subspace_answer_to_the_hello_steps_down_and_is_closed() {
+        let mut hs = OpenSecClientHandshake::new(&fixed(3), None);
+        let mut out = Vec::new();
+        assert!(matches!(hs.poll(0, &mut out), Step::Pending));
+        let hello = out.pop().expect("the hello went out");
+        let read_key = u32::from_le_bytes([hello[2], hello[3], hello[4], hello[5]]);
+        assert_eq!(
+            [hello[6], hello[7]],
+            [1, 0],
+            "read as SubSpace's protocol word"
+        );
+
+        let mut other = vec![0, 2];
+        other.extend_from_slice(&crate::vie::server_key_for(read_key ^ 1).to_le_bytes());
+        assert!(matches!(hs.on_datagram(1, &other, &mut out), Step::Pending));
+        hs.abandon(2, &mut out);
+        assert!(
+            out.is_empty(),
+            "nothing to close: the server never answered"
+        );
+
+        let mut answer = vec![0, 2];
+        answer.extend_from_slice(&crate::vie::server_key_for(read_key).to_le_bytes());
+        assert!(matches!(
+            hs.on_datagram(3, &answer, &mut out),
+            Step::StepDown(_)
+        ));
+        hs.abandon(4, &mut out);
+        assert_eq!(out, vec![vec![0, 7], vec![0, 7]]);
+    }
 
     fn fixed(seed: u8) -> Entropy {
         let state = std::sync::Mutex::new(seed);

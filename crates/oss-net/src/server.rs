@@ -70,27 +70,65 @@ impl<A: Eq + Hash + Clone> Server<A> {
             .acceptors
             .iter()
             .find_map(|a| a.accept(now, data, &mut out));
-        let replies = out.clone();
-        out.into_iter()
-            .for_each(|d| self.raw_out.push_back((from.clone(), d)));
         match accepted {
             Some(acc) => {
-                let mut conn = Connection::server(self.cfg.clone(), acc, now);
-                conn.set_connect_protocol(crate::cipher::parse_connect(data).map(|(_, p)| p));
-                conn.set_accept_record(data, &replies);
-                // The request itself counts as received traffic.
-                conn.note_received(now, data.len());
-                self.conns.insert(from.clone(), conn);
-                self.collect(from);
+                self.install(now, from, data, acc, out);
                 true
             }
-            None => false,
+            None => {
+                out.into_iter()
+                    .for_each(|d| self.raw_out.push_back((from.clone(), d)));
+                false
+            }
         }
     }
 
+    /// Opens the connection an acceptor took `data` for, and sends its answer.
+    fn install(
+        &mut self,
+        now: u64,
+        from: &A,
+        data: &[u8],
+        acc: crate::cipher::Accept,
+        replies: Vec<Vec<u8>>,
+    ) {
+        let mut conn = Connection::server(self.cfg.clone(), acc, now);
+        conn.set_connect_protocol(crate::cipher::parse_connect(data).map(|(_, p)| p));
+        conn.set_accept_record(data, &replies);
+        // The request itself counts as received traffic.
+        conn.note_received(now, data.len());
+        replies
+            .into_iter()
+            .for_each(|d| self.raw_out.push_back((from.clone(), d)));
+        self.conns.insert(from.clone(), conn);
+        self.collect(from);
+    }
+
     /// Handles a datagram from `from`.
+    ///
+    /// A connection request from a peer that already has a connection:
+    ///
+    /// - **the same request again**, before the session starts: its answer was
+    ///   lost, so it is answered again, identically;
+    /// - **a different request before the session starts** is a new connection,
+    ///   and replaces the old one outright: new cipher, new kind of client, new
+    ///   sequence numbers. The old one ends with [`Event::Disconnected`]
+    ///   ([`DisconnectReason::Reconnect`]) and no `00 07`, which the client
+    ///   would read as a refusal of the new request. A client stepping down
+    ///   between mechanisms meets a server that holds nothing from the last
+    ///   attempt (see [`crate::Handshake`], "Stepping between mechanisms").
+    ///   A request no acceptor takes changes nothing;
+    /// - **any request once the session has started** ends the old connection,
+    ///   and the client's next request opens a new one.
+    ///
+    /// A connection that has closed is let go at once, so the peer's next
+    /// request opens a new one without waiting for [`Server::tick`].
     pub fn handle_datagram(&mut self, now: u64, from: A, data: &[u8]) {
         let is_request = data.len() >= 2 && data[0] == 0 && (data[1] == 0x01 || data[1] == 0x11);
+        if self.conns.get(&from).is_some_and(Connection::is_closed) {
+            self.collect(&from);
+            self.conns.remove(&from);
+        }
         match self.conns.get_mut(&from) {
             None => {
                 if !is_request {
@@ -123,36 +161,34 @@ impl<A: Eq + Hash + Clone> Server<A> {
                     self.collect(&from);
                     self.conns.remove(&from);
                 } else {
-                    // Lost 00 02 or a client restart before login: answer again
-                    // and re-key, keeping sequence numbers and queues.
+                    // A different request before the session starts: a new
+                    // connection, replacing this one outright.
                     let mut out = Vec::new();
                     let accepted = self
                         .acceptors
                         .iter()
                         .find_map(|a| a.accept(now, data, &mut out));
-                    out.into_iter()
-                        .for_each(|d| self.raw_out.push_back((from.clone(), d)));
                     match accepted {
-                        Some(crate::cipher::Accept::Established(cipher)) => {
-                            if let Some(conn) = self.conns.get_mut(&from) {
-                                conn.rekey(cipher, now);
+                        Some(acc) => {
+                            if let Some(old) = self.conns.get_mut(&from) {
+                                old.close_quietly(DisconnectReason::Reconnect);
                             }
+                            self.collect(&from);
+                            self.conns.remove(&from);
+                            self.install(now, &from, data, acc, out);
                         }
-                        Some(pending) => {
-                            let mut conn = Connection::server(self.cfg.clone(), pending, now);
-                            conn.set_connect_protocol(
-                                crate::cipher::parse_connect(data).map(|(_, p)| p),
-                            );
-                            self.conns.insert(from.clone(), conn);
-                        }
-                        None => {}
+                        None => out
+                            .into_iter()
+                            .for_each(|d| self.raw_out.push_back((from.clone(), d))),
                     }
-                    self.collect(&from);
                 }
             }
             Some(conn) => {
                 conn.handle_datagram(now, data);
                 self.collect(&from);
+                if self.conns.get(&from).is_some_and(Connection::is_closed) {
+                    self.conns.remove(&from);
+                }
             }
         }
     }
@@ -275,10 +311,6 @@ impl<A: Eq + Hash + Clone> Server<A> {
 impl Connection {
     pub(crate) fn note_received(&mut self, now: u64, len: usize) {
         self.note_recv(now, len);
-    }
-
-    pub(crate) fn rekey(&mut self, cipher: Box<dyn crate::cipher::Cipher>, now: u64) {
-        self.set_cipher(cipher, now);
     }
 
     pub(crate) fn close_for_reconnect(&mut self) {

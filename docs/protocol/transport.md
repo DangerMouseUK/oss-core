@@ -45,10 +45,13 @@ A core datagram shorter than 2 bytes, or a packet that fails its length check, i
 
 So an unencrypted session takes a decision at each end, and neither end can be talked into one by the other.
 
-A repeated `00 01` from a known address is handled in one of two ways:
+A repeated `00 01` from a known address is handled in one of three ways by `oss-net`'s server:
 
-- **No session traffic yet** (the server's `00 02` was lost): answer again and re-key. Sequence numbers and queued data are kept.
+- **The same request again, no session traffic yet** (the server's `00 02` was lost): answer again, identically.
+- **A different request, no session traffic yet** (a client restart, or a client stepping down to another mechanism): a new connection, which replaces the old one outright, cipher, kind of client and sequence numbers. See [encryption](encryption.md#stepping-between-mechanisms).
 - **Session already established**: end the old connection and drop the request. The client keeps retrying until the old connection has gone.
+
+Other servers differ on the second case: ASSS and Subspace Server .NET keep the first connection, re-keyed, with the kind of client it was opened as.
 
 Continuum uses extra setup steps (`00 10`, `00 11`), described in [encryption](encryption.md).
 

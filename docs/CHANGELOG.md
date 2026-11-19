@@ -4,6 +4,20 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (stepping down between mechanisms closes the last attempt and starts afresh)
+
+**Breaking for anything that matches `Step` exhaustively or wraps a `Handshake`.** A client stepping down from one mechanism to the next could leave the server holding the connection its last attempt opened, and a server that keeps such a connection until it is closed then answered the next attempt and never heard its login. `docs/protocol/encryption.md` has a new section, "Stepping between mechanisms", with the whole rule.
+
+- **New `Step::StepDown(reason)`**: the server answered in a mechanism this handshake recognises and does not speak. A `Fallback` steps down on it at once; with nothing below, the connection treats it as `Failed`.
+- **Three new `Handshake` methods, all with defaults**: `answered()` (the server is talking to this rung, so the `Fallback`'s clock stops), `abandon(now, out)` (this rung is being left: close what the server holds), and `take_fresh_endpoint()` (true once per step down). **A handshake that wraps another must forward all three**; the defaults would hide the inner one's.
+- **`Fallback`** steps down on silence (as before) or on `StepDown`, but not on the clock once the first rung has `answered()`; it abandons the rung it leaves and asks for a fresh endpoint.
+- **New `Connection::take_fresh_endpoint()`**: after a step down the connection holds the next rung for its driver to rebind to a new local port. A driver that never asks gets the next rung on the same endpoint, at once if nothing was closed and after the new **`FRESH_ENDPOINT_GRACE_MS`** if something was, and the first plain `00 07` before the next rung is answered is taken as the closed connection's goodbye.
+- **`OpenSecClientHandshake`** recognises a SubSpace server's answer to its hello (a lenient server reading the hello as its own connection request), steps down and closes it.
+- **`Server`: a different connection request before the session starts now replaces the connection outright** instead of re-keying it in place, and says so: `Event::Disconnected(Reconnect)` for the old one, then `Event::Connected`. A consumer that maps addresses to players on those events lets the old one go. A connection the client closes is now let go at once rather than at the next `tick`. `tests/rekey_window.rs`'s one test of the old silent swap now pins the new behaviour; its timing measurements are unchanged.
+- **`oss-bot-sdk`**: `Session::take_fresh_endpoint()`, and `run` rebinds its socket when asked.
+
+`tests/stepping_down.rs` is the acceptance test: a server that keeps a connection's first handshake until it is closed, a first rung it answers, and a client that is heard only with a close or a fresh endpoint.
+
 ### oss-net (an unencrypted session now takes a decision at each end)
 
 **Breaking, and it changes who can put a connection in the clear.** Three paths reached an unencrypted session with nothing configured, all inside the VIE handshake rather than below it. Each needed one unauthenticated datagram, and none of them involved breaking a cipher.

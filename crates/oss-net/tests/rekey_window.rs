@@ -4,9 +4,14 @@
 //! `Server::handle_datagram` treats a fresh `00 01` from an address that
 //! already has a connection in one of two ways, and the whole of the difference
 //! is `Connection::session_started`. Before the session starts, the acceptor
-//! chain is re-run and the cipher it returns replaces the connection's,
-//! silently, keeping sequence numbers and queues. After it starts, the same
-//! datagram closes the connection instead.
+//! chain is re-run and the connection it opens replaces the old one outright
+//! (cipher, kind of client, sequence numbers), and the server says so: the old
+//! one ends with `Event::Disconnected(Reconnect)` and the new one starts with
+//! `Event::Connected`. After it starts, the same datagram closes the connection
+//! instead. (Until 2026-11-19 the swap before the session kept the old
+//! connection, re-keyed it and said nothing; a client stepping down between
+//! mechanisms then met a server still holding what the last attempt had
+//! opened.)
 //!
 //! So the window opens when the server establishes the connection and closes
 //! when the first reliable or game packet is delivered. Its width is set by the
@@ -274,9 +279,9 @@ fn post(
 }
 
 /// While the window is open, a connection request a *different* mechanism
-/// claims replaces the cipher, and nothing is emitted to say so.
+/// claims replaces the connection, and the server says so.
 #[test]
-fn a_different_mechanism_re_keys_silently_while_the_window_is_open() {
+fn a_different_mechanism_replaces_the_connection_while_the_window_is_open() {
     let mut server = opensec_server(Some(ServerKey::generate(&entropy(99))));
     let hello = first_datagram(Box::new(OpenSecClientHandshake::new(&entropy(1), None)));
     server.handle_datagram(0, ADDR, &hello);
@@ -293,15 +298,27 @@ fn a_different_mechanism_re_keys_silently_while_the_window_is_open() {
     while server.poll_transmit().is_some() {}
     let after: Vec<Event> = std::iter::from_fn(|| server.poll_event().map(|(_, e)| e)).collect();
 
-    assert_eq!(server.len(), 1, "the connection survives the swap");
+    assert_eq!(server.len(), 1, "one connection for the address");
+    let conn = server.connection(&ADDR).unwrap();
     assert_eq!(
-        server.connection(&ADDR).unwrap().cipher_kind(),
+        conn.cipher_kind(),
         Some(CipherKind::Vie),
-        "the second mechanism's cipher replaced the first"
+        "the second mechanism's connection replaced the first"
+    );
+    assert_eq!(
+        conn.connect_protocol(),
+        Some(1),
+        "with its own kind of client"
     );
     assert!(
-        after.is_empty(),
-        "the swap emits nothing, so a consumer cannot see it: {after:?}"
+        matches!(
+            after[..],
+            [
+                Event::Disconnected(DisconnectReason::Reconnect),
+                Event::Connected
+            ]
+        ),
+        "the swap is visible to a consumer, which can let the old one go: {after:?}"
     );
 }
 

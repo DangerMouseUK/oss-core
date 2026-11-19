@@ -372,3 +372,22 @@ fn login_failure_is_reported() {
     assert_eq!(failed, Some((login_code::BAD_PASSWORD, "wrong password")));
     assert!(bot.is_closed());
 }
+
+/// A bot trying OpenSec, then VIE, against a server that answers neither: when
+/// it steps down it asks once for a fresh endpoint, which `run` takes by
+/// rebinding its socket, so the server meets the VIE attempt as a client it
+/// holds nothing for.
+#[test]
+fn stepping_down_asks_for_a_fresh_endpoint_once() {
+    let config = BotConfig::new("bot", "pw").encryption(oss_bot_sdk::Encryption::OpenSecOrVie);
+    let mut bot = Session::new(config, 0);
+    let mut asked = 0;
+    for now in (0..3_000).step_by(10) {
+        bot.tick(now);
+        while bot.poll_transmit().is_some() {}
+        if bot.take_fresh_endpoint() {
+            asked += 1;
+        }
+    }
+    assert_eq!(asked, 1);
+}

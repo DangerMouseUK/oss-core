@@ -239,6 +239,27 @@ enum State {
 /// Maximum nesting of clusters/reliables processed recursively.
 const MAX_DEPTH: u32 = 4;
 
+/// How long a client connection holds the next rung of a step down when the
+/// rung it left closed something on the server and the driver did not take a
+/// fresh local endpoint (see [`Connection::take_fresh_endpoint`]): time for
+/// the server to let go of the closed connection before the next rung's
+/// request reaches the same address. When the rung left closed nothing, the
+/// next one waits only for the driver's chance to rebind.
+pub const FRESH_ENDPOINT_GRACE_MS: u64 = 1000;
+
+/// A step down waiting for the driver (see [`Connection::take_fresh_endpoint`]).
+#[derive(Debug, Clone, Copy)]
+struct EndpointBreak {
+    since: u64,
+    /// The rung left closed something, so the next one, if it goes on from the
+    /// same endpoint, pauses for [`FRESH_ENDPOINT_GRACE_MS`] first.
+    closed: bool,
+    /// The driver has had its chance to rebind. A break taken on a timer is
+    /// followed at once by the driver's send, so it has; one taken on a
+    /// datagram still has a tick to come before that send.
+    offered: bool,
+}
+
 /// Capacity of pooled buffers: a full datagram plus cipher overhead.
 const BUF_CAPACITY: usize = 576;
 /// Most buffers kept for reuse per connection.
@@ -387,6 +408,14 @@ pub struct Connection {
     accept_replies: Vec<Vec<u8>>,
     last_recv: u64,
     session_started: bool,
+    /// A step down is waiting for the driver to take a fresh endpoint; the
+    /// handshake is not polled meanwhile.
+    endpoint_break: Option<EndpointBreak>,
+    /// The rung left closed a connection on the server and the next one is (or
+    /// will be) on the same endpoint: the first plain `00 07` before the next
+    /// rung is answered is that connection's goodbye, not a refusal. Some
+    /// servers send one when they finish with a connection the client closed.
+    goodbye_once: bool,
     // Reliable send.
     next_seq: i32,
     pending: VecDeque<(Vec<u8>, Tag)>,
@@ -454,6 +483,8 @@ impl Connection {
             accept_replies: Vec::new(),
             last_recv: now,
             session_started: false,
+            endpoint_break: None,
+            goodbye_once: false,
             next_seq: 0,
             pending: VecDeque::new(),
             in_flight: VecDeque::new(),
@@ -515,6 +546,28 @@ impl Connection {
     /// once more to send the final `00 07`.
     pub fn is_closed(&self) -> bool {
         matches!(self.state, State::Closed)
+    }
+
+    /// Whether a client connection's handshake has stepped down to its next
+    /// mechanism and wants that one to start from a fresh local endpoint: true
+    /// once per step down. A driver that can should send what
+    /// [`Connection::poll_transmit`] holds from the old endpoint first (the
+    /// abandoned rung's closing datagrams), then rebind its socket to a new
+    /// local port before the next [`Connection::tick`], and drop the old one.
+    ///
+    /// The server then meets the next rung as a client it has never seen, so
+    /// nothing it kept from the last one is in the way. A driver that never
+    /// asks is served too: the next rung starts on the same endpoint, after
+    /// [`FRESH_ENDPOINT_GRACE_MS`] if the last rung closed a connection on the
+    /// server, and without waiting if it did not. See [`crate::Handshake`],
+    /// "Stepping between mechanisms".
+    pub fn take_fresh_endpoint(&mut self) -> bool {
+        let taken = self.endpoint_break.take().is_some();
+        if taken {
+            // Nothing for the old connection can reach a new endpoint.
+            self.goodbye_once = false;
+        }
+        taken
     }
 
     /// Whether any reliable or game data has been received yet (servers treat a
@@ -622,7 +675,7 @@ impl Connection {
 
     /// The connection request this server-side connection was created from and
     /// the raw replies sent to it, so a duplicate request can be answered
-    /// identically instead of re-keying.
+    /// identically instead of replacing the connection.
     pub(crate) fn set_accept_record(&mut self, request: &[u8], replies: &[Vec<u8>]) {
         self.accept_request.clear();
         self.accept_request.extend_from_slice(request);
@@ -748,18 +801,15 @@ impl Connection {
         self.last_recv = now;
     }
 
-    pub(crate) fn set_cipher(&mut self, cipher: Box<dyn Cipher>, now: u64) {
-        self.note_recv(now, 0);
-        self.stats.datagrams_received -= 1;
-        if self.is_connected() {
-            self.cipher = Some(cipher);
-        } else {
-            self.establish(cipher, now);
-        }
-    }
-
     pub(crate) fn close_with(&mut self, reason: DisconnectReason) {
         self.close(reason, true);
+    }
+
+    /// Closes without telling the peer: for a connection being replaced by a
+    /// new one from the same peer, which would read a `00 07` as a refusal of
+    /// the new one.
+    pub(crate) fn close_quietly(&mut self, reason: DisconnectReason) {
+        self.close(reason, false);
     }
 
     fn emit(&mut self, datagram: Vec<u8>) {
@@ -783,8 +833,22 @@ impl Connection {
         match &mut self.state {
             State::Closed => {}
             State::Handshaking(h) => {
+                // The last rung's connection closing, on a server that says so:
+                // not a refusal of this one, which has not been answered yet.
+                if self.goodbye_once && data == [0, 7] && !h.answered() {
+                    self.goodbye_once = false;
+                    return;
+                }
                 let mut out = Vec::new();
                 let step = h.on_datagram(now, data, &mut out);
+                if h.take_fresh_endpoint() {
+                    self.endpoint_break = Some(EndpointBreak {
+                        since: now,
+                        closed: !out.is_empty(),
+                        offered: false,
+                    });
+                    self.goodbye_once = !out.is_empty();
+                }
                 out.into_iter().for_each(|d| self.emit_raw(d));
                 self.apply_step(step, now);
             }
@@ -812,7 +876,10 @@ impl Connection {
         match step {
             Step::Pending => {}
             Step::Established(c) => self.establish(c, now),
-            Step::Failed(why) => self.close(DisconnectReason::HandshakeFailed(why), false),
+            // Nothing below this handshake to step down to.
+            Step::Failed(why) | Step::StepDown(why) => {
+                self.close(DisconnectReason::HandshakeFailed(why), false)
+            }
         }
     }
 
@@ -1053,8 +1120,27 @@ impl Connection {
         match &mut self.state {
             State::Closed => return,
             State::Handshaking(h) => {
+                if let Some(b) = &mut self.endpoint_break {
+                    if !b.offered {
+                        b.offered = true;
+                        return;
+                    }
+                    if b.closed && now.saturating_sub(b.since) < FRESH_ENDPOINT_GRACE_MS {
+                        return;
+                    }
+                    // The driver did not rebind: go on from this endpoint.
+                    self.endpoint_break = None;
+                }
                 let mut out = Vec::new();
                 let step = h.poll(now, &mut out);
+                if h.take_fresh_endpoint() {
+                    self.endpoint_break = Some(EndpointBreak {
+                        since: now,
+                        closed: !out.is_empty(),
+                        offered: true,
+                    });
+                    self.goodbye_once = !out.is_empty();
+                }
                 out.into_iter().for_each(|d| self.emit_raw(d));
                 self.apply_step(step, now);
                 if !self.is_connected() {
