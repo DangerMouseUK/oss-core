@@ -511,8 +511,10 @@ fixed_packet! {
 fixed_packet! {
     /// S2C `0x3B`: redirect to another server/arena.
     pub struct Redirect = kind::REDIRECT; {
-        /// IPv4 address bytes as on the wire (sources disagree on order; ASSS
-        /// sends network order a.b.c.d).
+        /// IPv4 address bytes as on the wire, octets reversed: `d c b a` for
+        /// a.b.c.d (`bc a6 dd 12` for 18.221.166.188), as live zones and
+        /// Subspace Server .NET send it. ASSS 1.4.4 sends network order
+        /// a.b.c.d instead. Kept raw; not turned into an address here.
         pub ip: [u8; 4],
         /// Port.
         pub port: u16,

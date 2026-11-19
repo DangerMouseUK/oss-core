@@ -704,7 +704,9 @@ fn pages() -> Vec<Page> {
             "redirect",
             Sources,
             S2C_CONT,
-            ""
+            "The address is the one field whose byte order the servers disagree on. Subspace Server .NET reads the dotted address as a big-endian 32-bit number and writes it little-endian like every other integer, so the octets go out reversed: `d c b a` for a.b.c.d, which is `bc a6 dd 12` for 18.221.166.188. A live zone captured on 2026-11-19 sent the same order, checked against the directory server's listing of the zone it named. ASSS 1.4.4 (`redirect.c`, `RawRedirect`) copies the result of `inet_aton` into the field unchanged, which leaves the octets in network order, `a b c d`. The Open SubSpace client reads the reversed order, as live zones send it.
+
+The port is little-endian in all of them. oss-proto keeps the four address bytes exactly as they arrive and does not turn them into an address."
         ),
         manual(
             S2C,

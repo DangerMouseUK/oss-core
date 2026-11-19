@@ -16,13 +16,19 @@ Licence: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Part of the 
 | Offset | Size | Type | Field | Meaning |
 |---|---|---|---|---|
 | 0 | 1 | u8 | type | `0x3B` |
-| 1 | 4 | [u8;4] | ip | IPv4 address bytes as on the wire (sources disagree on order; ASSS sends network order a.b.c.d). |
+| 1 | 4 | [u8;4] | ip | IPv4 address bytes as on the wire, octets reversed: `d c b a` for a.b.c.d (`bc a6 dd 12` for 18.221.166.188), as live zones and Subspace Server .NET send it. ASSS 1.4.4 sends network order a.b.c.d instead. Kept raw; not turned into an address here. |
 | 5 | 2 | u16 | port | Port. |
 | 7 | 2 | i16 | arena_type | Arena type, as in C2S `0x01`. |
 | 9 | 16 | FixedStr<16> | arena | Arena name. |
 | 25 | 4 | u32 | login_id | Login id echoed by the client in its login packet. |
 
 Integers are little-endian. `n` is a variable length; `i` counts repeated entries from 0.
+
+## Notes
+
+The address is the one field whose byte order the servers disagree on. Subspace Server .NET reads the dotted address as a big-endian 32-bit number and writes it little-endian like every other integer, so the octets go out reversed: `d c b a` for a.b.c.d, which is `bc a6 dd 12` for 18.221.166.188. A live zone captured on 2026-11-19 sent the same order, checked against the directory server's listing of the zone it named. ASSS 1.4.4 (`redirect.c`, `RawRedirect`) copies the result of `inet_aton` into the field unchanged, which leaves the octets in network order, `a b c d`. The Open SubSpace client reads the reversed order, as live zones send it.
+
+The port is little-endian in all of them. oss-proto keeps the four address bytes exactly as they arrive and does not turn them into an address.
 
 ## Evidence
 
