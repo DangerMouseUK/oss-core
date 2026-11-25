@@ -17,7 +17,8 @@ use oss_bot_sdk::{
     BotConfig, BotEvent, Encryption, Mechanism, MechanismError, MechanismId, MechanismRegistry,
     Session,
 };
-use oss_net::mechanism::{Era, Selection};
+use oss_net::mechanism::{Era, OpenSecSetup, Selection};
+use oss_net::opensec::{ServerKey, os_entropy};
 use oss_net::{Accept, Acceptor, Cipher, Config, Event, Handshake, MechanismPolicy, Server, Step};
 use oss_proto::s2c::{self, login_code};
 use oss_proto::{C2SPacket, S2CPacket};
@@ -117,6 +118,9 @@ struct Outcome {
     zone_cipher: Option<&'static str>,
     /// Fresh endpoints the bot asked for.
     fresh: u32,
+    /// SubSpace connection requests (`00 01`, 8 bytes) sent before any
+    /// cipher was in place.
+    subspace_requests: u32,
 }
 
 /// Runs `bot` against a zone whose acceptors are `zone`'s automatic order,
@@ -134,6 +138,9 @@ fn log_in(bot: &mut Session, zone: &MechanismRegistry) -> Outcome {
         now += 10;
         bot.tick(now);
         while let Some(d) = bot.poll_transmit() {
+            if bot.connection().cipher_name().is_none() && d.len() == 8 && d[..2] == [0, 1] {
+                out.subspace_requests += 1;
+            }
             server.handle_datagram(now, addr, &d);
         }
         if bot.take_fresh_endpoint() {
@@ -337,6 +344,35 @@ fn a_pinned_opensec_key_gives_one_rung() {
             Sent::SubSpaceRequest(2_000)
         ]
     );
+}
+
+/// The key on record reaches the handshake, by name and automatically: a zone
+/// holding that key is reached over OpenSec, and a zone holding another key is
+/// not reached at all, with no step down to the SubSpace cipher.
+#[test]
+fn a_pinned_opensec_key_is_enforced() {
+    let held = ServerKey::from_secret([3; 32]);
+    let other = ServerKey::from_secret([4; 32]);
+    let zone = MechanismRegistry::builtin_with_opensec(
+        OpenSecSetup::new(os_entropy()).server_key(held.clone()),
+    );
+    for encryption in [Encryption::Automatic, Encryption::named("opensec")] {
+        let right = BotConfig::new("bot", "pw")
+            .encryption(encryption.clone())
+            .pinned(id("opensec"), held.public());
+        let out = log_in(&mut Session::new(right, 0).unwrap(), &zone);
+        assert!(out.logged_in, "{encryption:?}: {out:?}");
+        assert_eq!(out.bot_cipher, Some("opensec"), "{encryption:?}");
+
+        let wrong = BotConfig::new("bot", "pw")
+            .encryption(encryption.clone())
+            .pinned(id("opensec"), other.public());
+        let out = log_in(&mut Session::new(wrong, 0).unwrap(), &zone);
+        assert!(!out.logged_in, "{encryption:?}: {out:?}");
+        assert_eq!(out.bot_cipher, None, "{encryption:?}");
+        assert_eq!(out.fresh, 0, "{encryption:?}");
+        assert_eq!(out.subspace_requests, 0, "{encryption:?}");
+    }
 }
 
 /// Automatic: OpenSec first, a hello every 250 ms; after 1000 ms without an
