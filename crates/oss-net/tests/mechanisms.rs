@@ -225,7 +225,7 @@ fn one_registration_line_has_all_four_effects() {
 // Where a mechanism lands.
 // ---------------------------------------------------------------------------
 
-/// The built-ins' start-up line, exactly as `D37` gives it.
+/// The built-ins' start-up line, exactly: weakest first, in the display names.
 #[cfg(all(feature = "opensec", feature = "os-entropy"))]
 #[test]
 fn the_builtin_supported_line_is_exact() {
@@ -610,10 +610,11 @@ fn duplicates_are_refused() {
     assert_eq!(written.order(), [id("vie"), id("dummy@example.org")]);
 }
 
-/// `D37` point 5: this project's short names match without regard to case;
-/// `name@domain` names match exactly. Display names are not typed words.
+/// This project's short names match without regard to case; `name@domain`
+/// names match exactly, as RFC 4250 has them. Display names are not typed
+/// words.
 #[test]
-fn typed_names_match_as_d37_says() {
+fn typed_names_match_short_names_in_any_case_and_others_exactly() {
     let mut registry = MechanismRegistry::builtin();
     registry.register(dummy()).unwrap();
 
