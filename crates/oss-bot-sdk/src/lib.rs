@@ -20,7 +20,10 @@
 //!
 //! What the session handles for you:
 //!
-//! * the transport (VIE by default, or OpenSec; see [`Encryption`]);
+//! * the transport: VIE by default, or any mechanism in
+//!   [`BotConfig::mechanisms`], by name or tried automatically (see
+//!   [`Encryption`]). A mechanism from elsewhere is added with one line:
+//!   `config.mechanisms.register(mechanism)?`;
 //! * login, including creating the account if the name is new;
 //! * entering the arena, then switching to the configured ship;
 //! * the player list, kept up to date from enter/leave/ship/team packets;
@@ -47,6 +50,9 @@ pub use text::{from_latin1, to_latin1};
 
 /// Re-exported for [`BotEvent::Disconnected`] and custom transports.
 pub use oss_net::DisconnectReason;
+/// Re-exported for [`BotConfig::mechanisms`], [`BotConfig::pinned`] and
+/// [`Session::automatic_progress`].
+pub use oss_net::{LadderProgress, Mechanism, MechanismError, MechanismId, MechanismRegistry};
 /// Re-exported for [`BotEvent::Packet`] and [`Session::send_packet`].
 pub use oss_proto;
 

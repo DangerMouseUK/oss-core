@@ -26,6 +26,10 @@ impl<F: FnMut(&mut Session, BotEvent)> Handler for F {
 
 /// Connects to `server`, logs in and runs `handler` until the connection
 /// closes. Returns why it closed.
+///
+/// A configuration [`Session::new`] refuses (a mechanism it cannot find, for
+/// example) is returned as an [`io::ErrorKind::InvalidInput`] error before
+/// anything is sent.
 pub fn run(
     server: impl ToSocketAddrs,
     config: BotConfig,
@@ -44,7 +48,8 @@ pub fn run(
 
     let start = Instant::now();
     let now = || start.elapsed().as_millis() as u64;
-    let mut bot = Session::new(config, now());
+    let mut bot =
+        Session::new(config, now()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let mut buf = [0u8; 2048];
     loop {
         match socket.recv(&mut buf) {

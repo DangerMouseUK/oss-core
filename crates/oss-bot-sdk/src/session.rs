@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use oss_formats::Level;
 use oss_net::{
-    Config, Connection, DisconnectReason, Event, Fallback, Handshake, VieClientHandshake,
+    ClientContext, Config, Connection, DisconnectReason, Event, Handshake, LadderProgress,
+    MechanismError, MechanismId, MechanismPolicy, MechanismRegistry,
 };
 use oss_proto::c2s::{
     self, C2SChat, GoArena, Login, MapRequest, SecurityResponse, SetFreq, SetShip, arena_type,
@@ -17,19 +18,47 @@ use oss_proto::{C2SPacket, C2SPosition, S2CPacket};
 
 use crate::text::{from_latin1, to_latin1};
 
-/// How the bot encrypts its connection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// How long an automatic connection waits for a mechanism to answer before it
+/// steps down to the next one.
+const STEP_DOWN_MS: u64 = 1_000;
+
+/// Which security mechanism the bot connects with.
+///
+/// The mechanisms themselves are in [`BotConfig::mechanisms`]; this only says
+/// which of them to use. The default is [`Encryption::Named`] `vie`, the
+/// SubSpace cipher, which every SubSpace server accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Encryption {
-    /// VIE, which every SubSpace server accepts.
-    #[default]
-    Vie,
-    /// OpenSec only, optionally requiring the server's pinned static key.
-    OpenSec {
-        /// The server's public key, if known.
-        pinned: Option<[u8; 32]>,
-    },
-    /// Try OpenSec, fall back to VIE if the server does not answer it.
-    OpenSecOrVie,
+    /// One mechanism, by the name a person would type, and nothing else.
+    ///
+    /// This project's short names (`none`, `vie`, `opensec`) match without
+    /// regard to case; anyone else's are `name@their-domain` and match exactly.
+    /// See [`MechanismRegistry::find`]. Asking by name wins over a key on
+    /// record for another mechanism ([`BotConfig::pinned`]): `vie` with an
+    /// OpenSec key on record connects with VIE.
+    Named(String),
+    /// Every mechanism that may be tried automatically, strongest first,
+    /// stepping down to the next after one second without an answer. With the
+    /// built-in mechanisms that is OpenSecurity, then Subspace.
+    ///
+    /// **With a key on record ([`BotConfig::pinned`]) it is that key's
+    /// mechanism and nothing else**, since stepping down from it would be a
+    /// downgrade.
+    Automatic,
+}
+
+impl Encryption {
+    /// [`Encryption::Named`] with `name`.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self::Named(name.into())
+    }
+}
+
+impl Default for Encryption {
+    /// `vie` by name.
+    fn default() -> Self {
+        Self::named("vie")
+    }
 }
 
 /// What the bot logs in as and where it goes.
@@ -47,8 +76,17 @@ pub struct BotConfig {
     pub create_account: bool,
     /// Download the map so security checks can be answered correctly.
     pub download_map: bool,
-    /// Encryption.
+    /// Which mechanism to connect with: `vie` by name unless changed.
     pub encryption: Encryption,
+    /// The mechanisms the bot can speak: the built-in ones
+    /// ([`MechanismRegistry::builtin`]) unless changed. Another mechanism is
+    /// added with one line, `config.mechanisms.register(mechanism)?`, after
+    /// which [`Encryption::Automatic`] tries it at its place by strength and
+    /// [`Encryption::Named`] can ask for it.
+    pub mechanisms: MechanismRegistry,
+    /// The server's long-term key, if one is on record, and the mechanism
+    /// that recorded it. See [`BotConfig::pinned`].
+    pub pinned: Option<(MechanismId, [u8; 32])>,
     /// Machine id sent at login.
     pub machine_id: u32,
 }
@@ -66,13 +104,16 @@ impl core::fmt::Debug for BotConfig {
             .field("create_account", &self.create_account)
             .field("download_map", &self.download_map)
             .field("encryption", &self.encryption)
+            .field("mechanisms", &self.mechanisms)
+            .field("pinned", &self.pinned.as_ref().map(|(id, _)| id))
             .field("machine_id", &self.machine_id)
             .finish()
     }
 }
 
 impl BotConfig {
-    /// A spectator bot entering any public arena, using VIE.
+    /// A spectator bot entering any public arena, using VIE, with the built-in
+    /// mechanisms registered.
     pub fn new(name: impl Into<String>, password: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -81,7 +122,9 @@ impl BotConfig {
             ship: SPECTATOR,
             create_account: true,
             download_map: true,
-            encryption: Encryption::Vie,
+            encryption: Encryption::default(),
+            mechanisms: MechanismRegistry::builtin(),
+            pinned: None,
             machine_id: 0x0B07_0B07,
         }
     }
@@ -102,6 +145,44 @@ impl BotConfig {
     pub fn encryption(mut self, encryption: Encryption) -> Self {
         self.encryption = encryption;
         self
+    }
+
+    /// The server's long-term key is on record, recorded by `mechanism`: the
+    /// connection must prove the server holds it.
+    ///
+    /// **This does not choose the mechanism.** Use it with
+    /// [`Encryption::Automatic`], which then tries `mechanism` alone, or with
+    /// [`Encryption::Named`] naming `mechanism`. With any other name, the
+    /// default `vie` included, the key is not used.
+    pub fn pinned(mut self, mechanism: MechanismId, key: [u8; 32]) -> Self {
+        self.pinned = Some((mechanism, key));
+        self
+    }
+
+    /// The handshake this configuration asks for, with a fresh random seed,
+    /// and the progress of the automatic order when it is one.
+    fn handshake(&self) -> Result<(Box<dyn Handshake>, Option<LadderProgress>), MechanismError> {
+        let seed = {
+            let mut b = [0u8; 4];
+            oss_net::opensec::os_entropy()(&mut b);
+            u32::from_le_bytes(b)
+        };
+        let mut ctx = ClientContext::new(seed);
+        if let Some((id, key)) = &self.pinned {
+            ctx = ctx.pinned(id.clone(), *key);
+        }
+        match &self.encryption {
+            Encryption::Named(name) => Ok((self.mechanisms.client_handshake(name, &ctx)?, None)),
+            Encryption::Automatic => {
+                let ladder = MechanismPolicy::automatic(&self.mechanisms).client_handshake(
+                    &self.mechanisms,
+                    &ctx,
+                    STEP_DOWN_MS,
+                )?;
+                let progress = ladder.progress();
+                Ok((Box::new(ladder), Some(progress)))
+            }
+        }
     }
 }
 
@@ -302,6 +383,8 @@ enum Stage {
 pub struct Session {
     config: BotConfig,
     conn: Connection,
+    /// Where the automatic order has got to, when the bot connects with one.
+    ladder: Option<LadderProgress>,
     stage: Stage,
     events: VecDeque<BotEvent>,
     pid: Option<i16>,
@@ -329,30 +412,6 @@ impl core::fmt::Debug for Session {
             .field("pid", &self.pid)
             .field("players", &self.players.len())
             .finish_non_exhaustive()
-    }
-}
-
-fn handshake(enc: &Encryption) -> Box<dyn Handshake> {
-    let seed = {
-        let mut b = [0u8; 4];
-        oss_net::opensec::os_entropy()(&mut b);
-        u32::from_le_bytes(b)
-    };
-    let vie: Box<dyn Handshake> = Box::new(VieClientHandshake::new(seed));
-    match enc {
-        Encryption::Vie => vie,
-        Encryption::OpenSec { pinned } => Box::new(oss_net::opensec::OpenSecClientHandshake::new(
-            &oss_net::opensec::os_entropy(),
-            *pinned,
-        )),
-        Encryption::OpenSecOrVie => Box::new(Fallback::new(
-            Box::new(oss_net::opensec::OpenSecClientHandshake::new(
-                &oss_net::opensec::os_entropy(),
-                None,
-            )),
-            vie,
-            1_000,
-        )),
     }
 }
 
@@ -387,9 +446,17 @@ fn login_reason(code: u8) -> &'static str {
 
 impl Session {
     /// Starts connecting at time `now` (milliseconds on any monotonic clock).
-    pub fn new(config: BotConfig, now: u64) -> Self {
-        let conn = Connection::client(Config::client(), handshake(&config.encryption), now);
-        Self::with_connection(config, conn)
+    ///
+    /// Refused if [`BotConfig::encryption`] names a mechanism that
+    /// [`BotConfig::mechanisms`] does not hold, or one with no client half; if
+    /// [`BotConfig::pinned`] names one it does not hold under
+    /// [`Encryption::Automatic`]; or if there is nothing to try automatically.
+    pub fn new(config: BotConfig, now: u64) -> Result<Self, MechanismError> {
+        let (handshake, ladder) = config.handshake()?;
+        let conn = Connection::client(Config::client(), handshake, now);
+        let mut session = Self::with_connection(config, conn);
+        session.ladder = ladder;
+        Ok(session)
     }
 
     /// Wraps an existing client connection (for custom handshakes or tests).
@@ -397,6 +464,7 @@ impl Session {
         Self {
             config,
             conn,
+            ladder: None,
             stage: Stage::Connecting,
             events: VecDeque::new(),
             pid: None,
@@ -485,6 +553,13 @@ impl Session {
     /// The underlying transport connection (statistics, cipher, ...).
     pub fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Under [`Encryption::Automatic`], which mechanisms are being tried, which
+    /// one is in use and, once connected, which one won. `None` for a
+    /// mechanism asked for by name, which is the only one tried.
+    pub fn automatic_progress(&self) -> Option<&LadderProgress> {
+        self.ladder.as_ref()
     }
 
     // ---- state ---------------------------------------------------------------

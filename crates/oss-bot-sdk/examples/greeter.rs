@@ -46,6 +46,7 @@ fn main() -> std::io::Result<()> {
     if let Some(arena) = args.next() {
         config = config.arena(arena);
     }
+    println!("{}", config.mechanisms.supported_line());
     oss_bot_sdk::run(server, config, &mut Greeter { pings: 0 })?;
     Ok(())
 }

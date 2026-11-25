@@ -162,7 +162,7 @@ impl Zone {
 fn bot_logs_in_answers_security_and_chats() {
     let mut zone = Zone::new();
     let config = BotConfig::new("TestBot", "pw").ship(1);
-    let mut bot = Session::new(config, 0);
+    let mut bot = Session::new(config, 0).unwrap();
     let mut events = Vec::new();
 
     let mut now = 0;
@@ -338,7 +338,7 @@ fn bot_logs_in_answers_security_and_chats() {
 fn login_failure_is_reported() {
     let mut server: Server<u8> = Server::new(Config::server());
     server.add_acceptor(Box::new(VieAcceptor::default()));
-    let mut bot = Session::new(BotConfig::new("X", "wrong"), 0);
+    let mut bot = Session::new(BotConfig::new("X", "wrong"), 0).unwrap();
     let mut failed = None;
     for now in (10..5_000).step_by(10) {
         bot.tick(now);
@@ -380,7 +380,7 @@ fn login_failure_is_reported() {
 fn new_user_retry_is_made_once() {
     let mut server: Server<u8> = Server::new(Config::server());
     server.add_acceptor(Box::new(VieAcceptor::default()));
-    let mut bot = Session::new(BotConfig::new("Newcomer", "pw"), 0);
+    let mut bot = Session::new(BotConfig::new("Newcomer", "pw"), 0).unwrap();
     let mut flags = Vec::new();
     let mut failed = None;
     for now in (10..5_000).step_by(10) {
@@ -424,8 +424,8 @@ fn new_user_retry_is_made_once() {
 /// holds nothing for.
 #[test]
 fn stepping_down_asks_for_a_fresh_endpoint_once() {
-    let config = BotConfig::new("bot", "pw").encryption(oss_bot_sdk::Encryption::OpenSecOrVie);
-    let mut bot = Session::new(config, 0);
+    let config = BotConfig::new("bot", "pw").encryption(oss_bot_sdk::Encryption::Automatic);
+    let mut bot = Session::new(config, 0).unwrap();
     let mut asked = 0;
     for now in (0..3_000).step_by(10) {
         bot.tick(now);

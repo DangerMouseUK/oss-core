@@ -4,6 +4,25 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-bot-sdk (the bot's encryption comes from the mechanism registry)
+
+**Breaking.** `Encryption` was a closed list of three cases, so a bot could only ever use the mechanisms this crate named. It now says only which mechanism to use, and the mechanisms themselves are a `MechanismRegistry` in the bot's configuration. A mechanism from elsewhere, including one supplied by a private module, is added with one line, `config.mechanisms.register(mechanism)?`, and needs nothing else to be tried automatically or asked for by name. **What goes on the wire, the default and the step-down time are unchanged**; `tests/mechanisms.rs` pins each against what the library sent before the change.
+
+- **`Encryption`** is now `Named(String)` (one mechanism, by the name a person would type; short names in any case, `name@domain` exactly) or `Automatic` (every automatic mechanism, strongest first, stepping down after 1000 ms of silence). The default is `Encryption::named("vie")`, as before. New helper `Encryption::named`.
+- **New `BotConfig::mechanisms`**: the registry, `MechanismRegistry::builtin()` unless changed.
+- **New `BotConfig::pinned` field and builder**: a server key on record and the mechanism that recorded it. With `Automatic` that mechanism is the only one tried; with `Named` it is used only by the mechanism named. **It does not choose the mechanism**: a key with the default, VIE by name, is not used.
+- **`Session::new` returns `Result<Session, MechanismError>`**: it refuses a name the registry does not hold, a key recorded by a mechanism it does not hold, and an automatic order with nothing in it. **`run`** returns that as an `io::ErrorKind::InvalidInput` error before sending anything.
+- **New `Session::automatic_progress()`**: under `Automatic`, which mechanism is being tried and which one won.
+- **Re-exported** from `oss_net`: `Mechanism`, `MechanismId`, `MechanismRegistry`, `MechanismError`, `LadderProgress`.
+
+| Before | Now |
+|---|---|
+| `Encryption::Vie` (the default) | `Encryption::named("vie")` (the default) |
+| `Encryption::OpenSec { pinned: None }` | `Encryption::named("opensec")` |
+| `Encryption::OpenSec { pinned: Some(key) }` | `Encryption::Automatic` or `Encryption::named("opensec")`, with `.pinned(MechanismId::new("opensec")?, key)` |
+| `Encryption::OpenSecOrVie` | `Encryption::Automatic` |
+| `Session::new(config, now)` | `Session::new(config, now)?` |
+
 ### oss-net (security mechanisms: one description each, and one list read by everything)
 
 **Not breaking: everything here is new, and nothing that existed changes.** The three traits, `Fallback`, `Server::add_acceptor`, `CipherKind` and what goes on the wire are untouched. New module `oss_net::mechanism`, re-exported at the crate root. `docs/protocol/encryption.md` has a new section, "Mechanisms", with the rules.
