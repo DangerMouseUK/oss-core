@@ -4,6 +4,21 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-net (security mechanisms: one description each, and one list read by everything)
+
+**Not breaking: everything here is new, and nothing that existed changes.** The three traits, `Fallback`, `Server::add_acceptor`, `CipherKind` and what goes on the wire are untouched. New module `oss_net::mechanism`, re-exported at the crate root. `docs/protocol/encryption.md` has a new section, "Mechanisms", with the rules.
+
+Until now a program's list of mechanisms, its preferred order and the words it accepted were each written out by hand wherever they were needed. Adding a mechanism meant editing all of them. Now each mechanism is described once and the rest is read from that description.
+
+- **`Mechanism`**: one mechanism, described once: an identifier, a display name, a strength, whether it may be tried automatically (`Selection`), an `Era`, and a constructor for each half (`client`, building a `Handshake` per connection from a `ClientContext`; `server`, building an `Acceptor`). `Mechanism::none()`, `vie()`, `vie_with(acceptor)` and `opensec(OpenSecSetup)` describe the built-ins.
+- **`MechanismId`**: an identifier, checked when made. This project's short names (`none`, `vie`, `continuum`, `opensec`) match without regard to case; anyone else's are `name@their-domain` and match exactly. Any other short name is refused.
+- **`Era`**: `SubSpace`, `Continuum` or `Modern`, declared by the mechanism: what the zone should treat the connection as.
+- **`MechanismRegistry`**: what a program can speak, kept by strength whatever order it was registered in. `register` refuses a duplicate identifier or display name, and refuses `none`, or anything weaker than VIE, declared automatic. `builtin()` holds `none`, `vie` and (with the default features) `opensec`; `builtin_with_opensec(setup)` takes a server key. `supported_line()` gives `Mechanisms supported: None, Subspace, OpenSecurity`; `find` matches a typed name; `client_handshake` builds the handshake for a mechanism chosen by name.
+- **`MechanismPolicy`**: what a program prefers. `automatic(&registry)` is the automatic mechanisms, strongest first; `from_names` takes an order a person wrote and refuses unknown, repeated or by-name-only names; `allow_deliberately` adds a by-name-only mechanism a server operator switched on, asked after the rest and never tried by a client on its own. `client_handshake` builds a `Ladder` (one rung only when a key is on record); `acceptors` builds the server's acceptors in order; `automatic_line()` and `enabled_line()` give the other two start-up lines.
+- **`Ladder`**: `Fallback` for any number of rungs, with the same rules (down on silence or on `Step::StepDown`, never on a failure, never from a rung that has answered; abandon the rung left, ask for a fresh endpoint). `Ladder::progress()` returns a `LadderProgress` that reports the rung in use and, once established, the mechanism that won and its era.
+
+`tests/mechanisms.rs` adds a fourth mechanism to a client and a server with one registration line each, and shows that the one line puts it in the automatic order, makes it selectable by name, adds it to the start-up line and connects. It also pins where mechanisms of other strengths land, the floor, the refused names, the name matching, and that a two-rung `Ladder` behaves exactly as `Fallback`.
+
 ### oss-proto, oss-bot-sdk (three corrections)
 
 - **`s2c::Redirect::ip`'s doc** now says the octets go out reversed (`d c b a` for a.b.c.d), as Subspace Server .NET and live zones send them; ASSS 1.4.4 sends network order. The codec is unchanged and keeps the bytes raw. The redirect packet page explains both.

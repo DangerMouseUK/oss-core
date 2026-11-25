@@ -11,7 +11,7 @@ Game traffic has been encrypted three different ways over the life of this game.
 | Era | What it is | Where this project stands |
 |---|---|---|
 | **VIE** | The original SubSpace cipher, named after **Virgin Interactive Entertainment**, the game's publisher — the 1998 client's version resource carries that name. An XOR keystream over a table expanded from a 32-bit session key, negotiated in the clear. It gives no confidentiality against anyone on the path and no integrity at all. | **Implemented in full, with vectors** — the rest of this page |
-| **Continuum** | The scheme the Continuum client brought in when it replaced the original SubSpace client, and still what most long-running zones require. The builds measured here are 0.38 and 0.40. | **Deliberately not implemented.** Only the handshake's [shape](#continuum-shape-only) is documented. A module developed outside these repositories supplies the cipher through the plug-in traits below, which is how a real Continuum client came to play on oss-server |
+| **Continuum** | The scheme the Continuum client brought in when it replaced the original SubSpace client, and still what most long-running zones require. The builds measured here are 0.38 and 0.40. | **Deliberately not implemented.** Only the handshake's [shape](#continuum-shape-only) is documented. A module developed outside these repositories supplies it as a [mechanism](#mechanisms-oss-net), which is how a real Continuum client came to play on oss-server |
 | **OpenSec** | This project's own, and the only one of the three that is modern cryptography: X25519, ChaCha20-Poly1305 and HKDF-SHA256, optional at both ends. | **Implemented and specified in full** — [opensec.md](opensec.md) |
 
 One of the three is withheld, and only its method. That the Continuum scheme exists, that zones require it, that this project interoperates with it, and that a module for it is being developed are all stated plainly here and in the READMEs. How it works is not, and will not be.
@@ -78,7 +78,7 @@ Both ends must therefore have been set before any session runs in the clear, and
 
 ## Continuum (shape only)
 
-The Continuum cipher and its key expansion are not part of this repository. The transport supports them through plug-in traits.
+The Continuum cipher and its key expansion are not part of this repository. The transport supports them through the traits every [mechanism](#mechanisms-oss-net) is built from.
 
 **Setup sequence**
 
@@ -108,19 +108,65 @@ Read from the 0.40 client's own handler for subtype `0x12`, by running it. No se
 - **Nothing is re-keyed.** The handler builds the reply from a scratch expander and leaves the connection's own cipher state, including its key words, untouched.
 - `00 13` is client-to-server only: the client's dispatch table sends subtype `0x13` to its unknown-packet arm.
 
-## Plug-in API (`oss-net`)
+## Mechanisms (`oss-net`)
+
+A **mechanism** is one way of securing a connection: no encryption, VIE, OpenSec, or one supplied from outside these repositories. The word is the one SASL and GSSAPI use for the same job. Implemented in `oss-net::mechanism`.
+
+### The three traits a mechanism is built from
 
 - **`Acceptor`** (server): inspects a new peer's first raw datagram, sends raw replies, and returns either an established `Cipher` or a pending `Handshake`.
-- **`Handshake`** (either side): consumes raw setup datagrams and finally yields a `Cipher`. On the client, its first `poll` emits `00 01`.
+- **`Handshake`** (either side): consumes raw setup datagrams and finally yields a `Cipher`. On the client, its first `poll` emits the opening datagram (`00 01` for VIE).
 - **`Cipher`**: encrypts and decrypts whole datagrams. It also receives in-session core subtypes ≥ 0x10 and can queue packets of its own.
+
+### One description per mechanism
+
+Each mechanism is described once, as a `Mechanism`:
+
+| Part | What it is |
+|---|---|
+| **Identifier** | The word typed in settings and on the command line. This project's own are `none`, `vie`, `continuum` and `opensec`, and no other short word is accepted. Anyone else names theirs `name@their-domain`, the SSH convention (RFC 4250 §4.6.1): at most 64 characters, printable ASCII with no spaces or commas, one `@`, and a domain name after it. Owning the domain is the only permission needed, so two names cannot collide. **Short names match without regard to case (`VIE` is `vie`); `name@domain` names match exactly.** Identifiers are for settings, logs and records; none goes on the wire. |
+| **Display name** | What people see: `None`, `Subspace`, `OpenSecurity`. Only identifiers are typed; a display name is never accepted in their place. |
+| **Strength** | Places it relative to the others. `none` is 0, `vie` 1000, `opensec` 3000; the gaps leave room between them. Equal strengths are ordered by identifier. |
+| **Selection** | *Automatic* (it may be tried on its own) or *by name only* (only when somebody names it). |
+| **Era** | What the zone should treat the connection as: `SubSpace`, `Continuum` or `Modern`. It decides, for example, which login form is sent. The mechanism declares it rather than leaving it to be guessed from its name. |
+| **Halves** | A *client half* that builds a fresh `Handshake` for each connection, and a *server half* that builds the server's `Acceptor`. Either may be missing. |
+
+### What a program can speak, and what it prefers
+
+These are two objects, kept apart on purpose. Where one list does both jobs, the order code happens to run in becomes the security policy without anybody choosing it.
+
+- **`MechanismRegistry`** is what the program **can** speak. The order mechanisms are registered in means nothing: they are kept by strength. `MechanismRegistry::builtin()` holds `none`, `vie` and `opensec`. **Adding a mechanism is one call to `register`**, and it then takes its place in everything below.
+- **`MechanismPolicy`** is what the program **prefers**, in order. By default it is the automatic mechanisms, strongest first, worked out from their strengths. A person can write a different order; it is checked against the registry.
+
+Read from them, rather than written out by hand:
+
+| | Example |
+|---|---|
+| The start-up line: every mechanism the program has, weakest first | `Mechanisms supported: None, Subspace, OpenSecurity` |
+| The client's automatic order, first tried first | `Automatic order: OpenSecurity, then Subspace` |
+| What a server has switched on, weakest first | `Mechanisms enabled on this zone: Subspace, OpenSecurity` |
+| Choosing one mechanism by name | `--security vie` |
+| The words the command line and settings accept | `none`, `vie`, `opensec` |
+
+### The floor
+
+**Nothing automatic goes below VIE.** `none`, and anything weaker than VIE, can only be chosen by name: the registry refuses one declared automatic, and a policy refuses to put one in its automatic order. A server serves `none` only when an operator switches it on, and then asks it after every automatic mechanism. A client reaches it only when a person asks for it by name. Both ends have to be set before a session runs in the clear; see [no encryption, and why it is not negotiable](#no-encryption-and-why-it-is-not-negotiable).
+
+**A key on record means that mechanism and nothing else.** When a client has a server's key recorded by a mechanism, the automatic order is just that mechanism, so there is nothing to step down to. A mechanism a person names is used whatever key is on record.
+
+### What a new mechanism's opening must look like
+
+**Our server offers a new peer's first datagram to the mechanisms only if it begins `00 01` or `00 11`.** Anything else from an address it does not know is dropped before any acceptor sees it. So every mechanism's opening datagram must begin with one of those two pairs.
+
+The server then asks each acceptor in its policy's order, and **the first that takes the datagram wins.** A new mechanism's opening must therefore not be one an existing acceptor would also take. VIE's acceptor takes a `00 01` exactly 8 bytes long; OpenSec's takes a `00 01` followed by the four bytes `OSEC` ([opensec.md](opensec.md)); the deliberate no-encryption acceptor takes the same 8-byte `00 01` as VIE, which is why it is asked last. A mechanism that can tell its own opening apart by length or by content alongside those is safe in any order.
 
 ## Stepping between mechanisms
 
-A client that can speak several mechanisms tries them in turn, from the strongest down, each one a *rung* of a `Fallback` (nest them for more than two). Every rung talks to the same server, so **an attempt the client gives up on can leave the server holding a connection for it**: the server may have answered late, answered in another mechanism, or taken one mechanism's opening for another's. Servers differ in what they then do with the next rung's request from the same address, and some keep the first connection (its keys, or the kind of client it recorded) until it is closed, so the next rung is answered and its login is then dropped without a word. A live zone was seen doing exactly that in November 2026.
+A client that can speak several mechanisms tries them in turn, from the strongest down, each one a *rung* of a `Ladder` (a `Fallback` is the same thing with two rungs). The ladder also reports which mechanism won, and so which era the connection is. Every rung talks to the same server, so **an attempt the client gives up on can leave the server holding a connection for it**: the server may have answered late, answered in another mechanism, or taken one mechanism's opening for another's. Servers differ in what they then do with the next rung's request from the same address, and some keep the first connection (its keys, or the kind of client it recorded) until it is closed, so the next rung is answered and its login is then dropped without a word. A live zone was seen doing exactly that in November 2026.
 
 The rule, in `oss-net`, used by every client and bot built on it:
 
-1. **A rung steps down on silence, or at once on an answer in a mechanism it recognises.** On silence, after the `Fallback`'s time limit, unless the rung reports that the server has answered (`Handshake::answered`), in which case the clock stops however long setup takes. On a recognised answer, the rung returns `Step::StepDown` and the `Fallback` moves on immediately. A *failure* still ends the connection instead (no fallback on a tampered answer), and a key on record still means no fallback at all.
+1. **A rung steps down on silence, or at once on an answer in a mechanism it recognises.** On silence, after the ladder's time limit (counted from the rung's first datagram), unless the rung reports that the server has answered (`Handshake::answered`), in which case the clock stops however long setup takes. On a recognised answer, the rung returns `Step::StepDown` and the ladder moves on immediately. The last rung has no such limit beyond its own. A *failure* still ends the connection instead (no fallback on a tampered answer), and a key on record still means no fallback at all.
 2. **The rung being left closes what the server may hold for it** (`Handshake::abandon`): typically a disconnect, if the server answered.
 3. **The next rung starts from a fresh local endpoint.** The connection asks its driver once per step down (`Connection::take_fresh_endpoint`); a driver that can rebinds its socket to a new local port before the next rung's first datagram. The server then meets the next rung as a client it has never seen. The client drivers in these repositories all rebind.
 4. **A driver that cannot rebind is still served.** The next rung starts on the same endpoint: at once if the rung left closed nothing, otherwise after `FRESH_ENDPOINT_GRACE_MS`, so the server can let the closed connection go. Some servers send a plain `00 07` of their own when they finish with a connection the client closed; the first such `00 07` before the next rung is answered is read as that goodbye, not as a refusal of the next rung.
