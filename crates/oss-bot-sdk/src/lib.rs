@@ -20,9 +20,9 @@
 //!
 //! What the session handles for you:
 //!
-//! * the transport: VIE by default, or any mechanism in
-//!   [`BotConfig::mechanisms`], by name or tried automatically (see
-//!   [`Encryption`]). A mechanism from elsewhere is added with one line:
+//! * the transport: by default the automatic order, as the graphical client
+//!   does it (with the built-in mechanisms, OpenSecurity, then Subspace), or any
+//!   mechanism in [`BotConfig::mechanisms`] by name (see [`Encryption`]). A mechanism from elsewhere is added with one line:
 //!   `config.mechanisms.register(mechanism)?`;
 //! * login, including creating the account if the name is new;
 //! * entering the arena, then switching to the configured ship;

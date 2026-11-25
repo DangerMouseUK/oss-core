@@ -4,20 +4,30 @@ For consumers of `oss-core` (oss-server, oss-client, bots, tools). Newest first.
 
 ## Unreleased
 
+### oss-bot-sdk (a bot now negotiates its encryption as the client does)
+
+**Behaviour change.** `Encryption::default()`, and so `BotConfig::new`, is now `Encryption::Automatic`. It was the SubSpace cipher by name (`Encryption::named("vie")`). A bot now negotiates exactly as the graphical client does: it tries every mechanism that may be tried automatically, strongest first, and steps down when a server does not answer. The order is read from the registry by strength, never written out: with the built-in mechanisms it is OpenSecurity, then Subspace, and a mechanism registered between them in strength is tried between them.
+
+- **What a bot sends first changes.** It used to open with a SubSpace connection request. It now opens with an OpenSecurity hello, every 250 ms, and against a server without OpenSecurity it asks its driver for a fresh endpoint after 1000 ms and continues with Subspace. `run` handles the fresh endpoint itself. A bot driving its own socket should honour `Session::take_fresh_endpoint()`, which the automatic order already needed.
+- **The step-down time is unchanged at 1000 ms.**
+- **A server key on record now takes effect with the default.** With `Automatic`, `BotConfig::pinned` limits the bot to that key's mechanism, and it never steps down from it. Under the old default, VIE by name, the key was not used. **Naming a mechanism still wins over a key on record**: `named("vie")` with an OpenSec key on record connects with VIE.
+- **To keep the old behaviour, ask for it:** `.encryption(Encryption::named("vie"))`.
+- `tests/mechanisms.rs` now pins the new default. It checks what the bot sends against a silent server, and that a mid-ranked mechanism lands between OpenSecurity and Subspace in its order.
+
 ### oss-bot-sdk (the bot's encryption comes from the mechanism registry)
 
-**Breaking.** `Encryption` was a closed list of three cases, so a bot could only ever use the mechanisms this crate named. It now says only which mechanism to use, and the mechanisms themselves are a `MechanismRegistry` in the bot's configuration. A mechanism from elsewhere, including one supplied by a private module, is added with one line, `config.mechanisms.register(mechanism)?`, and needs nothing else to be tried automatically or asked for by name. **What goes on the wire, the default and the step-down time are unchanged**; `tests/mechanisms.rs` pins each against what the library sent before the change.
+**Breaking.** `Encryption` was a closed list of three cases, so a bot could only ever use the mechanisms this crate named. It now says only which mechanism to use, and the mechanisms themselves are a `MechanismRegistry` in the bot's configuration. A mechanism from elsewhere, including one supplied by a private module, is added with one line, `config.mechanisms.register(mechanism)?`, and needs nothing else to be tried automatically or asked for by name. **What goes on the wire, the default and the step-down time were unchanged by this entry**; `tests/mechanisms.rs` pinned each against what the library sent before the change. **The default has since changed to `Automatic`: see the entry above.**
 
-- **`Encryption`** is now `Named(String)` (one mechanism, by the name a person would type; short names in any case, `name@domain` exactly) or `Automatic` (every automatic mechanism, strongest first, stepping down after 1000 ms of silence). The default is `Encryption::named("vie")`, as before. New helper `Encryption::named`.
+- **`Encryption`** is now `Named(String)` (one mechanism, by the name a person would type; short names in any case, `name@domain` exactly) or `Automatic` (every automatic mechanism, strongest first, stepping down after 1000 ms of silence). New helper `Encryption::named`. (This entry kept the default at `Encryption::named("vie")`; the entry above makes it `Automatic`.)
 - **New `BotConfig::mechanisms`**: the registry, `MechanismRegistry::builtin()` unless changed.
-- **New `BotConfig::pinned` field and builder**: a server key on record and the mechanism that recorded it. With `Automatic` that mechanism is the only one tried; with `Named` it is used only by the mechanism named. **It does not choose the mechanism**: a key with the default, VIE by name, is not used.
+- **New `BotConfig::pinned` field and builder**: a server key on record and the mechanism that recorded it. With `Automatic` that mechanism is the only one tried; with `Named` it is used only by the mechanism named. **It does not choose the mechanism**: a key with `named("vie")` is not used.
 - **`Session::new` returns `Result<Session, MechanismError>`**: it refuses a name the registry does not hold, a key recorded by a mechanism it does not hold, and an automatic order with nothing in it. **`run`** returns that as an `io::ErrorKind::InvalidInput` error before sending anything.
 - **New `Session::automatic_progress()`**: under `Automatic`, which mechanism is being tried and which one won.
 - **Re-exported** from `oss_net`: `Mechanism`, `MechanismId`, `MechanismRegistry`, `MechanismError`, `LadderProgress`.
 
 | Before | Now |
 |---|---|
-| `Encryption::Vie` (the default) | `Encryption::named("vie")` (the default) |
+| `Encryption::Vie` (the old default) | `Encryption::named("vie")`. **No longer the default**: `Encryption::default()` is now `Encryption::Automatic` |
 | `Encryption::OpenSec { pinned: None }` | `Encryption::named("opensec")` |
 | `Encryption::OpenSec { pinned: Some(key) }` | `Encryption::Automatic` or `Encryption::named("opensec")`, with `.pinned(MechanismId::new("opensec")?, key)` |
 | `Encryption::OpenSecOrVie` | `Encryption::Automatic` |

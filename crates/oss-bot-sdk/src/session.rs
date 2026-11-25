@@ -25,8 +25,9 @@ const STEP_DOWN_MS: u64 = 1_000;
 /// Which security mechanism the bot connects with.
 ///
 /// The mechanisms themselves are in [`BotConfig::mechanisms`]; this only says
-/// which of them to use. The default is [`Encryption::Named`] `vie`, the
-/// SubSpace cipher, which every SubSpace server accepts.
+/// which of them to use. The default is [`Encryption::Automatic`], the same
+/// automatic order the graphical client uses: with the built-in mechanisms,
+/// OpenSecurity, then Subspace, which every SubSpace server accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Encryption {
     /// One mechanism, by the name a person would type, and nothing else.
@@ -55,9 +56,9 @@ impl Encryption {
 }
 
 impl Default for Encryption {
-    /// `vie` by name.
+    /// [`Encryption::Automatic`].
     fn default() -> Self {
-        Self::named("vie")
+        Self::Automatic
     }
 }
 
@@ -76,7 +77,7 @@ pub struct BotConfig {
     pub create_account: bool,
     /// Download the map so security checks can be answered correctly.
     pub download_map: bool,
-    /// Which mechanism to connect with: `vie` by name unless changed.
+    /// Which mechanism to connect with: the automatic order unless changed.
     pub encryption: Encryption,
     /// The mechanisms the bot can speak: the built-in ones
     /// ([`MechanismRegistry::builtin`]) unless changed. Another mechanism is
@@ -112,8 +113,8 @@ impl core::fmt::Debug for BotConfig {
 }
 
 impl BotConfig {
-    /// A spectator bot entering any public arena, using VIE, with the built-in
-    /// mechanisms registered.
+    /// A spectator bot entering any public arena, using the automatic order,
+    /// with the built-in mechanisms registered.
     pub fn new(name: impl Into<String>, password: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -150,10 +151,10 @@ impl BotConfig {
     /// The server's long-term key is on record, recorded by `mechanism`: the
     /// connection must prove the server holds it.
     ///
-    /// **This does not choose the mechanism.** Use it with
-    /// [`Encryption::Automatic`], which then tries `mechanism` alone, or with
-    /// [`Encryption::Named`] naming `mechanism`. With any other name, the
-    /// default `vie` included, the key is not used.
+    /// **This does not choose the mechanism.** With [`Encryption::Automatic`],
+    /// the default, the bot then tries `mechanism` alone; with
+    /// [`Encryption::Named`] naming `mechanism` it uses the key too. **With any
+    /// other name, `vie` included, the key is not used.**
     pub fn pinned(mut self, mechanism: MechanismId, key: [u8; 32]) -> Self {
         self.pinned = Some((mechanism, key));
         self

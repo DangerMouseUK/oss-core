@@ -4,14 +4,15 @@
 //! The first test is the point. A mechanism from outside this crate,
 //! `dummy@example.org`, is added to a bot and to a zone with **one
 //! `register` line each**, and the bot logs in over it. The bot's default is
-//! the SubSpace cipher by name, so the bot also says it wants the automatic
-//! order; that is its choice of which mechanism to use, not a description of
-//! the mechanism, and the description is the one line.
+//! the automatic order, so the one line is all it takes.
 //!
-//! The rest pin what the library did before mechanisms were registered, as
-//! measured on the library just before the change: the default is VIE and
-//! nothing else; a key on record gives one rung; the automatic order walks
-//! OpenSec, then Subspace, stepping down after 1000 ms.
+//! The rest pin what goes on the wire. The automatic order, which is now the
+//! default, walks OpenSec, then Subspace, stepping down after 1000 ms, exactly
+//! as the library's automatic choice did before mechanisms were registered; a
+//! mechanism of middle strength is tried between the two; a key on record
+//! gives one rung; and the SubSpace cipher asked for by name is that and
+//! nothing else, which was the default until the bot was made to negotiate as
+//! the client does.
 
 use oss_bot_sdk::{
     BotConfig, BotEvent, Encryption, Mechanism, MechanismError, MechanismId, MechanismRegistry,
@@ -225,7 +226,7 @@ fn hellos(from: u64, until: u64) -> impl Iterator<Item = Sent> {
 /// the result.
 #[test]
 fn one_registration_line_lets_a_bot_connect_with_a_new_mechanism() {
-    let mut config = BotConfig::new("bot", "pw").encryption(Encryption::Automatic);
+    let mut config = BotConfig::new("bot", "pw");
     config.mechanisms.register(dummy()).unwrap();
 
     let mut zone = MechanismRegistry::builtin();
@@ -278,15 +279,104 @@ fn one_registration_line_lets_a_bot_connect_with_a_new_mechanism() {
     );
 }
 
-/// The default is the SubSpace cipher by name and nothing else: a
+/// The default is the automatic order, as the graphical client's is: OpenSec
+/// hellos every 250 ms, one fresh endpoint at 1000 ms, then a SubSpace
+/// connection request every second. Against a zone that serves OpenSec it
+/// connects with OpenSec, without stepping down.
+#[test]
+fn the_default_is_the_automatic_order() {
+    let config = BotConfig::new("bot", "pw");
+    assert_eq!(config.encryption, Encryption::Automatic);
+    assert_eq!(config.encryption, Encryption::default());
+    assert!(config.pinned.is_none());
+
+    let bot = Session::new(config.clone(), 0).unwrap();
+    let rungs: Vec<_> = bot.automatic_progress().unwrap().rungs().cloned().collect();
+    assert_eq!(rungs, [id("opensec"), id("vie")]);
+
+    let mut expected: Vec<Sent> = hellos(0, 1_000).collect();
+    expected.extend([
+        Sent::FreshEndpoint(1_000),
+        Sent::SubSpaceRequest(1_010),
+        Sent::SubSpaceRequest(2_010),
+    ]);
+    assert_eq!(silence(config.clone()), expected);
+
+    let mut bot = Session::new(config, 0).unwrap();
+    let out = log_in(&mut bot, &MechanismRegistry::builtin());
+    assert!(out.logged_in, "{out:?}");
+    assert_eq!(out.bot_cipher, Some("opensec"));
+    assert_eq!(out.zone_cipher, Some("opensec"));
+    assert_eq!(out.fresh, 0);
+}
+
+/// The default order is read from the registry by strength, never written
+/// out: a mechanism registered between the SubSpace cipher and OpenSec in
+/// strength is tried between them, whatever order it was registered in.
+/// This is where a mechanism of middle strength supplied from elsewhere goes.
+#[test]
+fn a_mid_ranked_mechanism_lands_between_opensec_and_subspace_by_default() {
+    let middle = || {
+        Mechanism::new(
+            "middle@example.org",
+            "Middle",
+            Era::Modern,
+            (Mechanism::STRENGTH_VIE + Mechanism::STRENGTH_OPENSEC) / 2,
+            Selection::Automatic,
+        )
+        .unwrap()
+        .client(|_| Box::new(DummyClient::default()))
+        .server(|| Box::new(DummyAcceptor))
+    };
+
+    let mut config = BotConfig::new("bot", "pw");
+    config.mechanisms.register(middle()).unwrap();
+    let bot = Session::new(config.clone(), 0).unwrap();
+    let rungs: Vec<_> = bot.automatic_progress().unwrap().rungs().cloned().collect();
+    assert_eq!(
+        rungs,
+        [id("opensec"), id("middle@example.org"), id("vie")],
+        "by strength, strongest first"
+    );
+    assert_eq!(
+        MechanismPolicy::automatic(&config.mechanisms).automatic_line(&config.mechanisms),
+        "Automatic order: OpenSecurity, then Middle, then Subspace"
+    );
+
+    // Registered first, into an empty registry, it lands in the same place.
+    let mut first = BotConfig::new("bot", "pw");
+    first.mechanisms = MechanismRegistry::new();
+    first.mechanisms.register(middle()).unwrap();
+    for m in MechanismRegistry::builtin().iter() {
+        first.mechanisms.register(m.clone()).unwrap();
+    }
+    let bot = Session::new(first, 0).unwrap();
+    let again: Vec<_> = bot.automatic_progress().unwrap().rungs().cloned().collect();
+    assert_eq!(again, rungs);
+
+    // Against a zone without OpenSec, the default steps down once, to the
+    // mechanism in the middle, and logs in over it.
+    let mut zone = MechanismRegistry::new();
+    zone.register(Mechanism::vie()).unwrap();
+    zone.register(middle()).unwrap();
+    let mut bot = Session::new(config, 0).unwrap();
+    let out = log_in(&mut bot, &zone);
+    assert!(out.logged_in, "{out:?}");
+    assert_eq!(out.bot_cipher, Some("dummy"));
+    assert_eq!(out.fresh, 1);
+    assert_eq!(
+        bot.automatic_progress().unwrap().established(),
+        Some(&id("middle@example.org"))
+    );
+}
+
+/// The SubSpace cipher asked for by name, the default until the bot was
+/// made to negotiate as the client does, is still that and nothing else: a
 /// connection request every second, never an OpenSec hello, never a step
 /// down. Registering another mechanism does not change that.
 #[test]
-fn the_default_is_vie_only() {
-    let config = BotConfig::new("bot", "pw");
-    assert_eq!(config.encryption, Encryption::named("vie"));
-    assert_eq!(config.encryption, Encryption::default());
-    assert!(config.pinned.is_none());
+fn vie_by_name_is_vie_only() {
+    let config = BotConfig::new("bot", "pw").encryption(Encryption::named("vie"));
 
     let vie_only = vec![
         Sent::SubSpaceRequest(0),
@@ -316,9 +406,7 @@ fn a_pinned_opensec_key_gives_one_rung() {
     let key = [7u8; 32];
     let opensec_only: Vec<Sent> = hellos(0, 3_000).collect();
 
-    let automatic = BotConfig::new("bot", "pw")
-        .encryption(Encryption::Automatic)
-        .pinned(id("opensec"), key);
+    let automatic = BotConfig::new("bot", "pw").pinned(id("opensec"), key);
     let bot = Session::new(automatic.clone(), 0).unwrap();
     let rungs: Vec<_> = bot.automatic_progress().unwrap().rungs().cloned().collect();
     assert_eq!(rungs, [id("opensec")]);
@@ -333,11 +421,13 @@ fn a_pinned_opensec_key_gives_one_rung() {
     let unpinned = BotConfig::new("bot", "pw").encryption(Encryption::named("opensec"));
     assert_eq!(silence(unpinned), opensec_only);
 
-    // A key on record does not choose the mechanism: with the default, VIE by
-    // name, the key is not used.
-    let default_with_key = BotConfig::new("bot", "pw").pinned(id("opensec"), key);
+    // A key on record does not choose the mechanism: with VIE by name, the
+    // key is not used.
+    let vie_with_key = BotConfig::new("bot", "pw")
+        .encryption(Encryption::named("vie"))
+        .pinned(id("opensec"), key);
     assert_eq!(
-        silence(default_with_key),
+        silence(vie_with_key),
         [
             Sent::SubSpaceRequest(0),
             Sent::SubSpaceRequest(1_000),
