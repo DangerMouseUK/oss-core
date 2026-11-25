@@ -8,8 +8,13 @@
 //! * [`Connection`]: one peer (client or server end).
 //! * [`Server`]: many connections keyed by address, with [`Acceptor`]s choosing
 //!   the encryption from each client's first datagram.
-//! * [`cipher`]: the [`Cipher`] / [`Handshake`] / [`Acceptor`] plug-in traits, plus
-//!   null and VIE implementations ([`VieAcceptor`], [`VieClientHandshake`]).
+//! * [`cipher`]: the [`Cipher`] / [`Handshake`] / [`Acceptor`] traits every
+//!   security mechanism is built from, plus null and VIE implementations
+//!   ([`VieAcceptor`], [`VieClientHandshake`]).
+//! * [`mechanism`]: each mechanism described once, in a [`MechanismRegistry`] of
+//!   what a program can speak and a [`MechanismPolicy`] of what it prefers. The
+//!   start-up line, the automatic order and choosing a mechanism by name are all
+//!   read from them.
 //!
 //! A minimal client loop:
 //!
@@ -36,6 +41,7 @@
 
 pub mod cipher;
 mod connection;
+pub mod mechanism;
 #[cfg(feature = "opensec")]
 pub mod opensec;
 pub mod relay;
@@ -49,6 +55,10 @@ pub use cipher::{
 pub use connection::{
     Config, Connection, DisconnectReason, Event, FRESH_ENDPOINT_GRACE_MS, Priority, SendFlags,
     Stats, TransferId, ticks,
+};
+pub use mechanism::{
+    ClientContext, Era, Ladder, LadderProgress, Mechanism, MechanismError, MechanismId,
+    MechanismPolicy, MechanismRegistry, Selection,
 };
 pub use server::Server;
 pub use vie::VieCipher;

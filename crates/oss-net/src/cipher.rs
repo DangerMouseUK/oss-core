@@ -1,10 +1,12 @@
-//! Encryption plug-in points: [`Cipher`] (per-connection packet transform),
-//! [`Handshake`] (connection setup state machine) and [`Acceptor`] (server-side
-//! recognition of a new connection from its first datagram).
+//! The three traits every security mechanism is built from: [`Cipher`]
+//! (per-connection packet transform), [`Handshake`] (connection setup state
+//! machine) and [`Acceptor`] (server-side recognition of a new connection from
+//! its first datagram). [`crate::mechanism`] describes each mechanism once and
+//! pairs its two halves.
 //!
 //! The transport never inspects key material. A cipher implementation outside
-//! this crate (for example a Continuum-compatible one) plugs in by implementing
-//! these traits:
+//! this crate (for example a Continuum-compatible one) is added by implementing
+//! these traits and registering a [`crate::mechanism::Mechanism`]:
 //!
 //! * server side: an [`Acceptor`] that recognises the client's first datagram
 //!   (e.g. `00 01` with protocol `0x0011`), sends its raw replies and returns a
@@ -187,7 +189,9 @@ pub trait Handshake: Send {
 }
 
 /// Tries one handshake, then steps down to another. Typical use: OpenSec first,
-/// VIE for servers that do not speak it. Nest them for more rungs.
+/// VIE for servers that do not speak it. For more rungs, nest them, or use a
+/// [`crate::mechanism::Ladder`], which follows the same rules for any number and
+/// reports which mechanism won.
 ///
 /// It steps down when the first gets **no answer** within a time limit, unless
 /// the first reports that the server [`answered`](Handshake::answered), and at
