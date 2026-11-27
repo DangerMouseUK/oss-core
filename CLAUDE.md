@@ -125,6 +125,19 @@ here and it is not present, stop and ask for it rather than carrying on from thi
 alone. Do not re-decide something that has already been settled, and do not start work
 that may already belong to somebody else.
 
+## The project's name
+
+**This section is identical in all four public repositories. Change it in all four or
+in none.**
+
+The project is called Open SubSpace, written as two words with a capital S at the start
+of Sub and of Space. Its repositories, crates, programs and folders carry the lower-case
+prefix oss-, which is the three capitals of Open SubSpace: oss-core, oss-server,
+oss-client, oss-bot. In text a player or operator reads, the name is written in full,
+never as OSS on its own, because OSS usually means open-source software. SubSpace and
+Continuum are the names of the original games; Open SubSpace is an independent,
+compatible implementation and is not affiliated with their authors.
+
 ## Crates
 - `oss-proto` — packet structs/enums + encode/decode. Pure data, `no_std`-friendly where practical (`alloc` ok).
 - `oss-net` — **sans-IO** transport state machine (no sockets, no clocks: callers pass `now` and datagrams). Client and server roles. Ciphers behind a trait (`null`, `vie` and `opensec`, all implemented); a private implementation of another cipher must be pluggable without changing this crate.

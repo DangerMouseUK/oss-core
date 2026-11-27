@@ -356,7 +356,7 @@ jobs:
           cp crates/oss-conformance/README.md "dist/${name}/README.md"
           cp "notices-download/${{ matrix.platform }}/THIRD-PARTY-NOTICES.txt" "dist/${name}/"
           {
-            echo "OSS Conformance ${version}."
+            echo "Open SubSpace conformance suite ${version}."
             echo
             echo "A conformance suite for SubSpace protocol implementations: it checks a"
             echo "client, server, bot or library written in any language. Open source"
